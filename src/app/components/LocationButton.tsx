@@ -13,8 +13,9 @@ export default function LocationButton({ onLocate, t, followMode = false }: Loca
   return (
     <button
       onClick={onLocate}
+      style={{ touchAction: 'manipulation', cursor: 'pointer' }}
       className={[
-        'glass-dark rounded-2xl touch-target-lg',
+        'glass-dark rounded-2xl',
         'transition-all duration-150',
         'active:scale-95',
         'shadow-xl shadow-black/40',
