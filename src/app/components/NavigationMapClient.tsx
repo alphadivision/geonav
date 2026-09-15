@@ -426,6 +426,13 @@ export default function NavigationMapClient() {
 
   // Location button: use getCurrentPosition for a fresh GPS fix, fall back to cached if inaccurate
   const handleLocateMe = useCallback(() => {
+    // Guard: geolocation API must be available
+    if (!navigator.geolocation) {
+      console.error('[GeoNav GPS locate] navigator.geolocation is not available in this browser/context');
+      if (mapRef.current) mapRef.current.locateUser();
+      return;
+    }
+
     // Always restore follow mode immediately
     setFollowMode(true);
 
@@ -436,7 +443,7 @@ export default function NavigationMapClient() {
 
         // Debug log
         console.log(
-          '[GeoNav GPS locate]',
+          '[GeoNav GPS locate] SUCCESS',
           `lat=${latitude.toFixed(7)}`,
           `lng=${longitude.toFixed(7)}`,
           `accuracy=${accuracy != null ? accuracy.toFixed(1) + 'm' : 'n/a'}`,
@@ -459,14 +466,23 @@ export default function NavigationMapClient() {
         }
       },
       (err) => {
-        console.warn('[GeoNav GPS locate] getCurrentPosition error:', err.message);
+        // Handle all geolocation error codes explicitly
+        if (err.code === 1) {
+          console.error('[GeoNav GPS locate] PERMISSION_DENIED — user denied geolocation access. Code:', err.code, err.message);
+        } else if (err.code === 2) {
+          console.error('[GeoNav GPS locate] POSITION_UNAVAILABLE — device cannot determine location. Code:', err.code, err.message);
+        } else if (err.code === 3) {
+          console.error('[GeoNav GPS locate] TIMEOUT — geolocation request timed out. Code:', err.code, err.message);
+        } else {
+          console.error('[GeoNav GPS locate] Unknown error. Code:', err.code, err.message);
+        }
         // Fall back to last known position
         if (mapRef.current) mapRef.current.locateUser();
       },
       {
         enableHighAccuracy: true,
-        timeout: 8000,
-        maximumAge: 0,
+        timeout: 20000,
+        maximumAge: 5000,
       }
     );
   }, []);
