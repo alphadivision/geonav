@@ -427,9 +427,6 @@ export default function NavigationMapClient() {
   // Location button: use the already-tracked watchPosition location immediately,
   // falling back to getCurrentPosition only if no location is known yet.
   const handleLocateMe = useCallback(() => {
-    // Always restore follow mode immediately
-    setFollowMode(true);
-
     // Primary path: use the location already tracked by watchPosition in MapCanvas.
     // locateUser() reads userLocationRef which is kept up-to-date by the continuous
     // watchPosition watcher — no GPS cold-start, no timeout risk.
