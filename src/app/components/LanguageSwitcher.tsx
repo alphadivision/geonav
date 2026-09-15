@@ -22,7 +22,7 @@ export default function LanguageSwitcher({
         onClick={() => onChange('ka')}
         className={[
           'px-3 py-3 text-sm font-semibold transition-all duration-200',
-          'min-h-[52px] min-w-[52px]',
+          'h-[52px] w-[52px]',
           'active:scale-95',
           language === 'ka' ?'bg-primary text-primary-foreground' :'text-muted-foreground hover:text-foreground hover:bg-muted/60',
         ].join(' ')}
@@ -38,7 +38,7 @@ export default function LanguageSwitcher({
         onClick={() => onChange('en')}
         className={[
           'px-3 py-3 text-sm font-semibold transition-all duration-200',
-          'min-h-[52px] min-w-[52px]',
+          'h-[52px] w-[52px]',
           'active:scale-95',
           language === 'en' ?'bg-primary text-primary-foreground' :'text-muted-foreground hover:text-foreground hover:bg-muted/60',
         ].join(' ')}
