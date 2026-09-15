@@ -81,7 +81,9 @@ export default function MapStyleSwitcher({ currentStyle, onStyleChange, t }: Map
       <button
         onClick={handleToggle}
         className={[
-          'glass-dark rounded-2xl touch-target-lg',
+          'glass-dark rounded-2xl',
+          'flex items-center justify-center',
+          'w-[52px] h-[52px]',
           'text-foreground hover:text-primary',
           'hover:bg-muted/60 transition-all duration-150',
           'active:scale-95 active:bg-muted',
