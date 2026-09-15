@@ -18,8 +18,8 @@ export default function RecenterButton({ onRecenter, t, followMode }: RecenterBu
         'transition-all duration-150',
         'active:scale-95',
         'shadow-xl shadow-black/40',
-        'flex flex-col items-center justify-center gap-0.5',
-        'px-2 py-2 min-w-[52px]',
+        'flex items-center justify-center',
+        'w-[52px] h-[52px]',
         followMode
           ? 'text-primary bg-primary/20 border border-primary/40' :'text-foreground hover:text-primary hover:bg-muted/60 active:bg-muted border border-white/10',
       ].join(' ')}
@@ -55,16 +55,6 @@ export default function RecenterButton({ onRecenter, t, followMode }: RecenterBu
           opacity={followMode ? 0.5 : 1}
         />
       </svg>
-      {/* Label */}
-      <span
-        className={[
-          'text-[8px] font-semibold leading-tight text-center max-w-[48px] break-words',
-          followMode ? 'text-primary' : 'text-muted-foreground',
-        ].join(' ')}
-        style={{ wordBreak: 'break-word', hyphens: 'auto' }}
-      >
-        {t.recenter}
-      </span>
     </button>
   );
 }
