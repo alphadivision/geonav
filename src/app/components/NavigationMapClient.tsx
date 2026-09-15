@@ -481,8 +481,8 @@ export default function NavigationMapClient() {
       },
       {
         enableHighAccuracy: true,
-        timeout: 8000,
-        maximumAge: 0,
+        timeout: 20000,
+        maximumAge: 5000,
       }
     );
   }, []);
