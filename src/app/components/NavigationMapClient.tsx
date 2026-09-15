@@ -522,7 +522,8 @@ export default function NavigationMapClient() {
       {/* Replace destination prompt */}
       {showReplacePrompt && (
         <div
-          className="fixed bottom-0 left-0 right-0 z-panel bottom-sheet-enter"
+          className="fixed bottom-0 left-0 z-panel bottom-sheet-enter"
+          style={{ maxWidth: 'min(420px, calc(100vw - 80px))' }}
           data-no-map-tap
         >
           <div
@@ -553,7 +554,8 @@ export default function NavigationMapClient() {
       {/* Pin destination card */}
       {pinDestination && !showReplacePrompt && (
         <div
-          className="fixed bottom-0 left-0 right-0 z-panel bottom-sheet-enter"
+          className="fixed bottom-0 left-0 z-panel bottom-sheet-enter"
+          style={{ maxWidth: 'min(420px, calc(100vw - 80px))' }}
           data-no-map-tap
         >
           <PinDestinationCard
@@ -569,7 +571,8 @@ export default function NavigationMapClient() {
       {/* Bottom destination / route panel (search-selected destination, pre-route) */}
       {showBottomPanel && (
         <div
-          className="fixed bottom-0 left-0 right-0 z-panel bottom-sheet-enter"
+          className="fixed bottom-0 left-0 z-panel bottom-sheet-enter"
+          style={{ maxWidth: 'min(420px, calc(100vw - 80px))' }}
           data-no-map-tap
         >
           <DestinationCard
@@ -587,7 +590,8 @@ export default function NavigationMapClient() {
       {/* Route alternatives panel */}
       {showRouteAlternatives && (
         <div
-          className="fixed bottom-0 left-0 right-0 z-panel bottom-sheet-enter"
+          className="fixed bottom-0 left-0 z-panel bottom-sheet-enter"
+          style={{ maxWidth: 'min(420px, calc(100vw - 80px))' }}
           data-no-map-tap
         >
           <RouteAlternativesPanel
