@@ -690,7 +690,9 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       map.getCanvas().addEventListener('touchstart', handlePointerDown, { passive: true });
 
       map.on('error', (e) => {
-        console.error('[MapCanvas] Map error:', e.error?.message);
+        const msg = e.error?.message;
+        if (!msg || msg === 'None') return;
+        console.error('[MapCanvas] Map error:', msg);
       });
 
       // Watch user location
