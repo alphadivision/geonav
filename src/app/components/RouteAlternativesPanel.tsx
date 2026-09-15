@@ -66,10 +66,13 @@ export default function RouteAlternativesPanel({
         className="mx-3 mb-3 rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
         style={cardStyle}
       >
-        <button
+        <div
           onClick={() => setCollapsed(false)}
-          className="w-full flex items-center gap-3 px-4 py-3 active:opacity-80 transition-opacity"
+          className="w-full flex items-center gap-3 px-4 py-3 active:opacity-80 transition-opacity cursor-pointer"
           aria-label="Expand route panel"
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setCollapsed(false); }}
         >
           <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center">
             <Navigation size={15} className="text-primary" />
@@ -88,7 +91,7 @@ export default function RouteAlternativesPanel({
           >
             <X size={16} />
           </button>
-        </button>
+        </div>
       </div>
     );
   }
