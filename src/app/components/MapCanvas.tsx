@@ -27,7 +27,10 @@ import {
 } from '@/lib/mapbox';
 import { watchPosition, clearWatch } from '@/lib/geolocation';
 
-const MAPBOX_PUBLIC_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || '';
+// Token is read inside the effect (not at module parse time) so it is
+// available after Next.js inlines NEXT_PUBLIC_* values into the client bundle.
+// Keeping this as a module-level const caused Vercel production builds to
+// capture an empty string before the env substitution was applied.
 
 const MIN_MOVEMENT_FOR_BEARING = 3;
 const HEADING_SMOOTH_ALPHA = 0.3;
@@ -535,9 +538,24 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     }, [trafficEnabled, applyTrafficVisibility]);
 
     useEffect(() => {
-      if (!containerRef.current || !MAPBOX_PUBLIC_TOKEN) return;
+      // Read the token at effect-execution time so the Next.js-inlined
+      // NEXT_PUBLIC_MAPBOX_TOKEN value is always resolved correctly in
+      // production builds (Vercel inlines NEXT_PUBLIC_* at build time, but
+      // a module-level const can be frozen as '' before that substitution).
+      const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || '';
 
-      mapboxgl.accessToken = MAPBOX_PUBLIC_TOKEN;
+      if (!containerRef.current || !token) {
+        // Token is missing — surface an error instead of hanging on the
+        // loading screen forever.
+        console.error(
+          '[GeoNav] Mapbox token is not available. ' +
+          'Make sure NEXT_PUBLIC_MAPBOX_TOKEN (or MAPBOX_ACCESS_TOKEN forwarded '+ 'via next.config.mjs env block) is set in your Vercel environment variables.'
+        );
+        onMapReady(); // unblock the loading overlay so the UI is at least visible
+        return;
+      }
+
+      mapboxgl.accessToken = token;
 
       const initialStyle = MAP_STYLES[mapStyle] || MAP_STYLES[DEFAULT_MAP_STYLE];
       currentStyleRef.current = mapStyle;
