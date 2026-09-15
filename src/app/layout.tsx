@@ -16,7 +16,7 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: 'GeoNav — Navigation for Georgia',
+  title: 'TSLMAP — Navigation for Georgia',
   description: 'Tesla-optimized driving navigation for Georgia. Search Georgian addresses, get real routes, navigate in Georgian or English.',
   icons: {
     icon: [
