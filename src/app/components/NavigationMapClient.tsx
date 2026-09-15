@@ -37,7 +37,7 @@ const MapCanvas = dynamic(() => import('./MapCanvas'), {
     <div className="fixed inset-0 bg-background flex items-center justify-center">
       <div className="flex flex-col items-center gap-4">
         <div className="w-10 h-10 border-2 border-primary border-t-transparent rounded-full spinner" />
-        <p className="text-muted-foreground text-sm font-medium">GeoNav</p>
+        <p className="text-muted-foreground text-sm font-medium">TSLMAP</p>
       </div>
     </div>
   ),
