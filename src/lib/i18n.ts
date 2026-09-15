@@ -64,6 +64,8 @@ export interface Translations {
   remainingDistance: string;
   eta: string;
   offRoute: string;
+  // Recenter / compass button
+  recenter: string;
 }
 
 export const translations: Record<Language, Translations> = {
@@ -129,6 +131,7 @@ export const translations: Record<Language, Translations> = {
     remainingDistance: 'დარჩენილი',
     eta: 'ჩასვლა',
     offRoute: 'მარშრუტის ხელახლა გამოთვლა',
+    recenter: 'ცენტრში დაბრუნება',
   },
   en: {
     appName: 'GeoNav',
@@ -192,6 +195,7 @@ export const translations: Record<Language, Translations> = {
     remainingDistance: 'Remaining',
     eta: 'ETA',
     offRoute: 'Recalculate route',
+    recenter: 'Recenter',
   },
 };
 

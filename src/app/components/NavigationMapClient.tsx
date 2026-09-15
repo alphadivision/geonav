@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import type { LineString } from 'geojson';
+
 import type { Language } from '@/lib/i18n';
 import type { MapStyle } from '@/types';
 import { getStoredLanguage, setStoredLanguage, getTranslations, TRAFFIC_KEY } from '@/lib/i18n';
@@ -27,6 +27,7 @@ import MapStyleSwitcher, { getStoredMapStyle, setStoredMapStyle } from './MapSty
 import TrafficButton from './TrafficButton';
 import RouteAlternativesPanel from './RouteAlternativesPanel';
 import PinDestinationCard from './PinDestinationCard';
+import RecenterButton from './RecenterButton';
 import type { MapCanvasHandle } from './MapCanvas';
 
 const MapCanvas = dynamic(() => import('./MapCanvas'), {
@@ -221,7 +222,8 @@ export default function NavigationMapClient() {
 
       if (mapRef.current) {
         mapRef.current.setAlternativeRoutes(alternatives, fastestIdx);
-        mapRef.current.fitRoute(alternatives[fastestIdx].geometry as LineString);
+        // Center on current GPS location immediately after navigation starts
+        mapRef.current.locateUser();
       }
     } catch (err) {
       console.error('[route] Error:', err);
@@ -359,7 +361,8 @@ export default function NavigationMapClient() {
         mapRef.current.setPinMarker(null);
         mapRef.current.setDestinationMarker(pinDestination.coordinates);
         mapRef.current.setAlternativeRoutes(alternatives, fastestIdx);
-        mapRef.current.fitRoute(alternatives[fastestIdx].geometry as LineString);
+        // Center on current GPS location immediately after navigation starts
+        mapRef.current.locateUser();
       }
     } catch (err) {
       console.error('[pin-route] Error:', err);
@@ -422,6 +425,11 @@ export default function NavigationMapClient() {
 
   // Location button: restore follow mode + fly to user
   const handleLocateMe = useCallback(() => {
+    setFollowMode(true);
+    if (mapRef.current) mapRef.current.locateUser();
+  }, []);
+
+  const handleRecenter = useCallback(() => {
     setFollowMode(true);
     if (mapRef.current) mapRef.current.locateUser();
   }, []);
@@ -490,7 +498,7 @@ export default function NavigationMapClient() {
         </div>
       </div>
 
-      {/* Right side controls: zoom + traffic + map style + locate */}
+      {/* Right side controls: zoom + traffic + map style + locate + recenter */}
       <div
         className="fixed right-3 sm:right-5 bottom-4 z-panel flex flex-col gap-2"
         data-no-map-tap
@@ -514,6 +522,11 @@ export default function NavigationMapClient() {
         <div className="h-1" />
         <LocationButton
           onLocate={handleLocateMe}
+          t={t}
+          followMode={followMode}
+        />
+        <RecenterButton
+          onRecenter={handleRecenter}
           t={t}
           followMode={followMode}
         />
