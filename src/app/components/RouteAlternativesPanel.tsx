@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import type { RouteAlternative } from '@/types';
 import type { Translations } from '@/lib/i18n';
 import type { Language } from '@/lib/i18n';
 import { formatDistance, formatDuration } from '@/lib/geolocation';
-import { Zap, Navigation, X } from 'lucide-react';
+import { Zap, Navigation, X, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface RouteAlternativesPanelProps {
   routes: RouteAlternative[];
@@ -42,32 +42,81 @@ export default function RouteAlternativesPanel({
   onClear,
   destinationName,
 }: RouteAlternativesPanelProps) {
+  const [collapsed, setCollapsed] = useState(false);
+
   const handleSelect = useCallback(
-    (index: number) => {
-      onSelectRoute(index);
-    },
+    (index: number) => { onSelectRoute(index); },
     [onSelectRoute]
   );
 
   if (routes.length === 0) return null;
 
-  return (
-    <div className="glass-dark border-t border-border/40 shadow-2xl shadow-black/60">
-      {/* Active route indicator bar */}
-      <div className="h-1 bg-primary w-full" />
+  const selectedRoute = routes.find((r) => r.index === selectedIndex) ?? routes[0];
 
-      <div className="px-4 sm:px-5 py-3 sm:py-4">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <Navigation size={16} className="text-primary" />
-            <span className="text-sm font-semibold text-foreground truncate max-w-[180px] sm:max-w-[280px]">
-              {destinationName}
-            </span>
+  const cardStyle = {
+    backdropFilter: 'blur(16px)',
+    background: 'rgba(18,18,24,0.88)',
+    border: '1px solid rgba(255,255,255,0.10)',
+  };
+
+  // ── Collapsed bar ──────────────────────────────────────────────────────────
+  if (collapsed) {
+    return (
+      <div
+        className="mx-3 mb-3 rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
+        style={cardStyle}
+      >
+        <button
+          onClick={() => setCollapsed(false)}
+          className="w-full flex items-center gap-3 px-4 py-3 active:opacity-80 transition-opacity"
+          aria-label="Expand route panel"
+        >
+          <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center">
+            <Navigation size={15} className="text-primary" />
           </div>
+          <div className="flex-1 min-w-0 text-left">
+            <p className="text-sm font-bold text-white leading-tight truncate">{destinationName}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {formatDistance(selectedRoute.distance, language)} · {formatDuration(selectedRoute.duration, language)}
+            </p>
+          </div>
+          <ChevronUp size={18} className="flex-shrink-0 text-muted-foreground" />
+          <button
+            onClick={(e) => { e.stopPropagation(); onClear(); }}
+            className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-muted-foreground hover:text-white hover:bg-white/10 transition-colors active:scale-95"
+            aria-label={t.clearDestination}
+          >
+            <X size={16} />
+          </button>
+        </button>
+      </div>
+    );
+  }
+
+  // ── Expanded panel ─────────────────────────────────────────────────────────
+  return (
+    <div
+      className="mx-3 mb-3 rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
+      style={cardStyle}
+    >
+      {/* Active route indicator */}
+      <div className="h-0.5 bg-primary w-full" />
+
+      <div className="px-4 py-3">
+        {/* Header */}
+        <div className="flex items-center gap-2 mb-3">
+          <Navigation size={15} className="text-primary flex-shrink-0" />
+          <span className="flex-1 text-sm font-semibold text-white truncate">{destinationName}</span>
+          <button
+            onClick={() => setCollapsed(true)}
+            className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-muted-foreground hover:text-white hover:bg-white/10 transition-colors active:scale-95"
+            aria-label="Minimize route panel"
+          >
+            <ChevronDown size={18} />
+          </button>
           <button
             onClick={onClear}
-            className="touch-target rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors duration-150 active:scale-95"
+            className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-muted-foreground hover:text-white hover:bg-white/10 transition-colors active:scale-95"
             aria-label={t.clearDestination}
           >
             <X size={18} />
@@ -75,7 +124,7 @@ export default function RouteAlternativesPanel({
         </div>
 
         {/* Route options */}
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1.5">
           {routes.map((route) => {
             const isSelected = route.index === selectedIndex;
             return (
@@ -83,74 +132,43 @@ export default function RouteAlternativesPanel({
                 key={route.index}
                 onClick={() => handleSelect(route.index)}
                 className={[
-                  'w-full flex items-center gap-3 px-3 py-3 rounded-xl',
-                  'text-left transition-all duration-150',
-                  'active:scale-[0.98]',
+                  'w-full flex items-center gap-3 px-3 py-2.5 rounded-xl',
+                  'text-left transition-all duration-150 active:scale-[0.98]',
                   isSelected
-                    ? 'bg-primary/20 border border-primary/50 shadow-sm shadow-primary/20'
-                    : 'bg-white/5 border border-white/10 hover:bg-white/10',
+                    ? 'bg-primary/20 border border-primary/50' :'bg-white/5 border border-white/8 hover:bg-white/10',
                 ].join(' ')}
               >
-                {/* Route type icon */}
-                <div
-                  className={[
-                    'flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center text-base',
-                    isSelected ? 'bg-primary/30' : 'bg-white/10',
-                  ].join(' ')}
-                >
-                  {route.isFastest ? (
-                    <Zap size={16} className={isSelected ? 'text-primary' : 'text-yellow-400'} />
-                  ) : (
-                    <span>{getRoadTypeIcon(route.roadType)}</span>
-                  )}
+                <div className={[
+                  'flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-sm',
+                  isSelected ? 'bg-primary/30' : 'bg-white/10',
+                ].join(' ')}>
+                  {route.isFastest
+                    ? <Zap size={14} className={isSelected ? 'text-primary' : 'text-yellow-400'} />
+                    : <span className="text-xs">{getRoadTypeIcon(route.roadType)}</span>}
                 </div>
 
-                {/* Route info */}
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span
-                      className={[
-                        'text-sm font-semibold',
-                        isSelected ? 'text-primary' : 'text-foreground',
-                      ].join(' ')}
-                    >
+                  <div className="flex items-center gap-1.5">
+                    <span className={['text-xs font-semibold', isSelected ? 'text-primary' : 'text-white'].join(' ')}>
                       {route.isFastest ? t.fastest : t.alternative}
                     </span>
                     {route.isFastest && (
-                      <span className="text-xs bg-yellow-500/20 text-yellow-400 px-1.5 py-0.5 rounded-md font-medium">
-                        ★
-                      </span>
+                      <span className="text-[10px] bg-yellow-500/20 text-yellow-400 px-1 py-0.5 rounded font-medium">★</span>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>{getRoadTypeLabel(route.roadType, t)}</span>
-                  </div>
+                  <p className="text-[10px] text-muted-foreground">{getRoadTypeLabel(route.roadType, t)}</p>
                 </div>
 
-                {/* Distance + Duration */}
                 <div className="flex-shrink-0 text-right">
-                  <p
-                    className={[
-                      'text-sm font-bold text-tabular',
-                      isSelected ? 'text-foreground' : 'text-foreground/80',
-                    ].join(' ')}
-                  >
+                  <p className={['text-xs font-bold text-tabular', isSelected ? 'text-white' : 'text-white/80'].join(' ')}>
                     {formatDistance(route.distance, language)}
                   </p>
-                  <p
-                    className={[
-                      'text-xs font-semibold text-tabular',
-                      isSelected ? 'text-accent' : 'text-muted-foreground',
-                    ].join(' ')}
-                  >
+                  <p className={['text-[10px] font-semibold text-tabular', isSelected ? 'text-accent' : 'text-muted-foreground'].join(' ')}>
                     {formatDuration(route.duration, language)}
                   </p>
                 </div>
 
-                {/* Selected indicator */}
-                {isSelected && (
-                  <div className="flex-shrink-0 w-2 h-2 rounded-full bg-primary ml-1" />
-                )}
+                {isSelected && <div className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-primary ml-0.5" />}
               </button>
             );
           })}
