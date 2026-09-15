@@ -27,16 +27,16 @@ import {
 } from '@/lib/mapbox';
 import { watchPosition, clearWatch } from '@/lib/geolocation';
 
-// Token is read inside the effect (not at module parse time) so it is
-// available after Next.js inlines NEXT_PUBLIC_* values into the client bundle.
-// Keeping this as a module-level const caused Vercel production builds to
-// capture an empty string before the env substitution was applied.
+const MIN_MOVEMENT_FOR_BEARING = 3;   // metres — minimum movement to recalculate bearing
+const HEADING_SMOOTH_ALPHA = 0.3;     // arrow heading smoothing (0=frozen, 1=instant)
+const CAMERA_BEARING_ALPHA = 0.15;    // camera bearing smoothing (slower = less jitter)
+const MIN_CAMERA_MOVE = 2;            // metres — ignore GPS updates smaller than this
+const NAV_ZOOM = 16;                  // stable navigation zoom level
+const NAV_FOLLOW_DURATION = 600;      // ms for follow camera animation
+const NAV_RECENTER_DURATION = 900;    // ms for recenter button animation
 
-const MIN_MOVEMENT_FOR_BEARING = 3;
-const HEADING_SMOOTH_ALPHA = 0.3;
-// Off-route threshold in meters
-const OFF_ROUTE_THRESHOLD = 80;
-// Minimum distance change to trigger off-route recalculation
+// Off-route detection
+const OFF_ROUTE_THRESHOLD = 80;       // metres
 const OFF_ROUTE_CHECK_INTERVAL = 5000; // ms
 
 interface MapCanvasProps {
@@ -139,6 +139,22 @@ function pointToSegmentDistance(
   return haversineDistance(p, proj);
 }
 
+/**
+ * Smooth a position using exponential moving average.
+ * Returns null if the movement is below the minimum threshold.
+ */
+function smoothPosition(
+  prev: [number, number] | null,
+  next: [number, number],
+  alpha: number
+): [number, number] {
+  if (!prev) return next;
+  return [
+    prev[0] + alpha * (next[0] - prev[0]),
+    prev[1] + alpha * (next[1] - prev[1]),
+  ];
+}
+
 const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
   (
     {
@@ -162,8 +178,12 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const isMapReadyRef = useRef(false);
     const destinationMarkerRef = useRef<[number, number] | null>(null);
     const userLocationRef = useRef<[number, number] | null>(null);
+    // Smoothed position used for camera (separate from raw GPS for arrow)
+    const smoothedPositionRef = useRef<[number, number] | null>(null);
     const hasInitialLocationRef = useRef(false);
     const currentHeadingRef = useRef<number>(0);
+    // Smoothed camera bearing (separate from arrow heading for less jitter)
+    const cameraHeadingRef = useRef<number>(0);
     const prevPositionRef = useRef<[number, number] | null>(null);
     const isStyleChangingRef = useRef(false);
     const currentStyleRef = useRef<MapStyle>(mapStyle);
@@ -177,6 +197,11 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const lastOffRouteCheckRef = useRef<number>(0);
     const isDraggingRef = useRef(false);
     const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
+    // Track whether the user is currently zooming (pinch/scroll) — zoom alone should not break follow
+    const isZoomingRef = useRef(false);
+    const zoomTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Pending camera animation frame to avoid queuing multiple easeTo calls
+    const cameraRafRef = useRef<number | null>(null);
 
     // Keep refs in sync with props
     followModeRef.current = followMode;
@@ -226,11 +251,9 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       if (!style) return;
       const existingLayerIds = new Set(style.layers.map((l) => l.id));
 
-      // Check if Mapbox traffic source is available in the current style
       const hasTrafficSource = !!style.sources?.[TRAFFIC_SOURCE];
 
       if (!hasTrafficSource) {
-        // For styles without built-in traffic, add the traffic source and layers
         if (enabled) {
           try {
             if (!map.getSource(TRAFFIC_SOURCE)) {
@@ -239,7 +262,6 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
                 url: 'mapbox://mapbox.mapbox-traffic-v1',
               });
             }
-            // Add a simple congestion layer
             if (!map.getLayer('geonav-traffic-congestion')) {
               map.addLayer({
                 id: 'geonav-traffic-congestion',
@@ -280,7 +302,6 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         return;
       }
 
-      // For styles with built-in traffic layers (navigation styles)
       const visibility = enabled ? 'visible' : 'none';
       TRAFFIC_LAYER_IDS.forEach((layerId) => {
         if (existingLayerIds.has(layerId)) {
@@ -456,7 +477,6 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         }
       });
 
-      // Apply traffic visibility after layers are set up
       applyTrafficVisibility(map, trafficEnabledRef.current);
     }, [getLabelLayer, addArrowImage, applyTrafficVisibility]);
 
@@ -480,15 +500,41 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       []
     );
 
+    /**
+     * Apply navigation follow mode camera.
+     * - Keeps vehicle slightly below vertical center (Google Maps style)
+     * - Uses smoothed camera bearing to avoid jitter
+     * - Maintains stable NAV_ZOOM unless user has manually zoomed
+     * - Batches via requestAnimationFrame to avoid queuing multiple easeTo calls
+     */
     const applyFollowMode = useCallback(
-      (coords: [number, number], heading: number) => {
+      (coords: [number, number], bearing: number) => {
         const map = mapRef.current;
         if (!map || !followModeRef.current) return;
-        map.easeTo({
-          center: coords,
-          bearing: heading,
-          duration: 300,
-          easing: (t) => t,
+
+        // Cancel any pending frame
+        if (cameraRafRef.current !== null) {
+          cancelAnimationFrame(cameraRafRef.current);
+        }
+
+        cameraRafRef.current = requestAnimationFrame(() => {
+          cameraRafRef.current = null;
+          const m = mapRef.current;
+          if (!m || !followModeRef.current) return;
+
+          // Use map padding to push the vehicle below center (Google Maps style).
+          // Bottom padding = 35% of map height keeps vehicle in lower third.
+          const mapHeight = m.getContainer().clientHeight || 600;
+          const bottomPad = Math.round(mapHeight * 0.35);
+
+          m.easeTo({
+            center: coords,
+            bearing,
+            zoom: NAV_ZOOM,
+            padding: { top: 0, bottom: bottomPad, left: 0, right: 0 },
+            duration: NAV_FOLLOW_DURATION,
+            easing: (t: number) => 1 - Math.pow(1 - t, 3), // ease-out cubic
+          });
         });
       },
       []
@@ -509,13 +555,11 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         ensureSourceAndLayer(map);
         isStyleChangingRef.current = false;
 
-        // Restore user position
         if (userLocationRef.current) {
           const src = map.getSource(USER_MARKER_SOURCE) as mapboxgl.GeoJSONSource;
           if (src) src.setData(buildPointGeoJSON(userLocationRef.current));
           updateArrowPosition(userLocationRef.current, currentHeadingRef.current);
         }
-        // Restore destination
         if (destinationMarkerRef.current) {
           const src = map.getSource(DESTINATION_MARKER_SOURCE) as mapboxgl.GeoJSONSource;
           if (src) src.setData(buildPointGeoJSON(destinationMarkerRef.current));
@@ -523,14 +567,12 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       });
     }, [ensureSourceAndLayer, updateArrowPosition]);
 
-    // Watch for mapStyle prop changes
     useEffect(() => {
       if (isMapReadyRef.current) {
         applyMapStyle(mapStyle);
       }
     }, [mapStyle, applyMapStyle]);
 
-    // Watch for trafficEnabled prop changes
     useEffect(() => {
       if (isMapReadyRef.current && mapRef.current) {
         applyTrafficVisibility(mapRef.current, trafficEnabled);
@@ -538,20 +580,14 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     }, [trafficEnabled, applyTrafficVisibility]);
 
     useEffect(() => {
-      // Read the token at effect-execution time so the Next.js-inlined
-      // NEXT_PUBLIC_MAPBOX_TOKEN value is always resolved correctly in
-      // production builds (Vercel inlines NEXT_PUBLIC_* at build time, but
-      // a module-level const can be frozen as '' before that substitution).
       const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || '';
 
       if (!containerRef.current || !token) {
-        // Token is missing — surface an error instead of hanging on the
-        // loading screen forever.
         console.error(
           '[GeoNav] Mapbox token is not available. ' +
           'Make sure NEXT_PUBLIC_MAPBOX_TOKEN (or MAPBOX_ACCESS_TOKEN forwarded '+ 'via next.config.mjs env block) is set in your Vercel environment variables.'
         );
-        onMapReady(); // unblock the loading overlay so the UI is at least visible
+        onMapReady();
         return;
       }
 
@@ -590,16 +626,34 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         onZoomChange(Math.round(map.getZoom()));
       });
 
-      // Detect manual drag — disable follow mode
-      map.on('dragstart', () => {
-        isDraggingRef.current = true;
-        if (followModeRef.current) {
-          onFollowDisabledRef.current();
+      // Track zoom interactions — zoom alone should NOT disable follow mode
+      map.on('zoomstart', (e) => {
+        // Only mark as zooming if it's a user gesture (not programmatic easeTo)
+        if (e.originalEvent) {
+          isZoomingRef.current = true;
+          if (zoomTimeoutRef.current) clearTimeout(zoomTimeoutRef.current);
+        }
+      });
+
+      map.on('zoomend', () => {
+        if (zoomTimeoutRef.current) clearTimeout(zoomTimeoutRef.current);
+        zoomTimeoutRef.current = setTimeout(() => {
+          isZoomingRef.current = false;
+        }, 200);
+      });
+
+      // Detect manual drag — disable follow mode (but NOT zoom-only)
+      map.on('dragstart', (e) => {
+        // Only disable follow if it's a real user drag (has originalEvent)
+        if (e.originalEvent && !isZoomingRef.current) {
+          isDraggingRef.current = true;
+          if (followModeRef.current) {
+            onFollowDisabledRef.current();
+          }
         }
       });
 
       map.on('dragend', () => {
-        // Small delay so tap handler doesn't fire after drag
         setTimeout(() => {
           isDraggingRef.current = false;
         }, 100);
@@ -618,16 +672,14 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         if (!onMapTapRef.current) return;
         if (isDraggingRef.current) return;
 
-        // Check if click was on a UI element (not the map canvas)
         const target = e.originalEvent.target as HTMLElement;
         if (target && target.closest('[data-no-map-tap]')) return;
 
-        // Verify it's a genuine tap (not a drag)
         const start = dragStartPosRef.current;
         if (start) {
           const dx = Math.abs(e.originalEvent.clientX - start.x);
           const dy = Math.abs(e.originalEvent.clientY - start.y);
-          if (dx > 8 || dy > 8) return; // Was a drag, not a tap
+          if (dx > 8 || dy > 8) return;
         }
 
         const coords: [number, number] = [e.lngLat.lng, e.lngLat.lat];
@@ -645,17 +697,24 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       watchIdRef.current = watchPosition(
         (location) => {
           onUserLocationUpdate(location);
-          const coords: [number, number] = [location.lng, location.lat];
+          const rawCoords: [number, number] = [location.lng, location.lat];
           const prev = userLocationRef.current;
-          userLocationRef.current = coords;
+
+          // --- GPS position smoothing ---
+          // Only update smoothed position if movement exceeds threshold
+          const moveDist = prev ? haversineDistance(prev, rawCoords) : Infinity;
+          const isSignificantMove = moveDist >= MIN_CAMERA_MOVE;
+
+          // Always update raw position ref (used for bearing calculation)
+          userLocationRef.current = rawCoords;
 
           if (!map || !isMapReadyRef.current || isStyleChangingRef.current) return;
 
-          // Update accuracy/dot marker
+          // Update accuracy/dot marker at raw GPS position (always responsive)
           const src = map.getSource(USER_MARKER_SOURCE) as mapboxgl.GeoJSONSource;
-          if (src) src.setData(buildPointGeoJSON(coords));
+          if (src) src.setData(buildPointGeoJSON(rawCoords));
 
-          // Determine heading
+          // --- Heading calculation ---
           let newHeading: number | null = null;
 
           if (
@@ -667,12 +726,13 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           }
 
           if (newHeading === null && prev !== null) {
-            const dist = haversineDistance(prev, coords);
+            const dist = haversineDistance(prev, rawCoords);
             if (dist >= MIN_MOVEMENT_FOR_BEARING) {
-              newHeading = calculateBearing(prev, coords);
+              newHeading = calculateBearing(prev, rawCoords);
             }
           }
 
+          // Smooth the arrow heading
           if (newHeading !== null) {
             currentHeadingRef.current = smoothHeading(
               currentHeadingRef.current,
@@ -681,27 +741,52 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
             );
           }
 
-          updateArrowPosition(coords, currentHeadingRef.current);
+          // Smooth the camera bearing separately (more conservative = less jitter)
+          if (newHeading !== null) {
+            cameraHeadingRef.current = smoothHeading(
+              cameraHeadingRef.current,
+              newHeading,
+              CAMERA_BEARING_ALPHA
+            );
+          }
 
-          // Off-route detection
+          // Update arrow at raw GPS position
+          updateArrowPosition(rawCoords, currentHeadingRef.current);
+
+          // --- Smooth camera position ---
+          // Use exponential smoothing for camera position to prevent jitter
+          if (isSignificantMove) {
+            smoothedPositionRef.current = smoothPosition(
+              smoothedPositionRef.current,
+              rawCoords,
+              0.4 // position smoothing alpha (0=frozen, 1=instant)
+            );
+          }
+
+          const cameraCoords = smoothedPositionRef.current ?? rawCoords;
+
+          // --- Off-route detection ---
           if (activeRouteGeometryRef.current && activeRouteGeometryRef.current.length > 0) {
             const now = Date.now();
             if (now - lastOffRouteCheckRef.current > OFF_ROUTE_CHECK_INTERVAL) {
               lastOffRouteCheckRef.current = now;
-              const dist = distanceToRoute(coords, activeRouteGeometryRef.current);
+              const dist = distanceToRoute(rawCoords, activeRouteGeometryRef.current);
               if (dist > OFF_ROUTE_THRESHOLD) {
                 onOffRouteRef.current?.();
               }
             }
           }
 
-          // Follow mode: center + rotate map
+          // --- Camera follow ---
           if (followModeRef.current) {
-            applyFollowMode(coords, currentHeadingRef.current);
+            // Only animate camera if there's a meaningful position change
+            if (isSignificantMove || !smoothedPositionRef.current) {
+              applyFollowMode(cameraCoords, cameraHeadingRef.current);
+            }
           } else if (!hasInitialLocationRef.current) {
             hasInitialLocationRef.current = true;
             map.flyTo({
-              center: coords,
+              center: rawCoords,
               zoom: 14,
               duration: 1200,
               essential: true,
@@ -723,6 +808,14 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
       return () => {
         clearWatch(watchIdRef.current);
+        if (cameraRafRef.current !== null) {
+          cancelAnimationFrame(cameraRafRef.current);
+          cameraRafRef.current = null;
+        }
+        if (zoomTimeoutRef.current) {
+          clearTimeout(zoomTimeoutRef.current);
+          zoomTimeoutRef.current = null;
+        }
         map.getCanvas().removeEventListener('mousedown', handlePointerDown);
         map.getCanvas().removeEventListener('touchstart', handlePointerDown);
         map.remove();
@@ -780,17 +873,15 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           if (!mapRef.current || !isMapReadyRef.current) return;
           const map = mapRef.current;
 
-          // Clear all alt route sources first
           for (let i = 0; i < MAX_ALT_ROUTES; i++) {
             const srcId = `${ALT_ROUTE_SOURCE_PREFIX}${i}`;
             const src = map.getSource(srcId) as mapboxgl.GeoJSONSource;
             if (src) src.setData({ type: 'FeatureCollection', features: [] });
           }
 
-          // Draw non-selected routes as alternatives
           let altIdx = 0;
           routes.forEach((route) => {
-            if (route.index === selectedIndex) return; // skip selected (drawn as main)
+            if (route.index === selectedIndex) return;
             if (altIdx >= MAX_ALT_ROUTES) return;
             const srcId = `${ALT_ROUTE_SOURCE_PREFIX}${altIdx}`;
             const src = map.getSource(srcId) as mapboxgl.GeoJSONSource;
@@ -800,7 +891,6 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
             altIdx++;
           });
 
-          // Draw selected route as main
           const selected = routes.find((r) => r.index === selectedIndex);
           if (selected) {
             const mainSrc = map.getSource(ROUTE_SOURCE_ID) as mapboxgl.GeoJSONSource;
@@ -815,7 +905,6 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           if (!mapRef.current || !isMapReadyRef.current) return;
           const map = mapRef.current;
 
-          // Clear alt routes
           for (let i = 0; i < MAX_ALT_ROUTES; i++) {
             const srcId = `${ALT_ROUTE_SOURCE_PREFIX}${i}`;
             const src = map.getSource(srcId) as mapboxgl.GeoJSONSource;
@@ -888,11 +977,16 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
         locateUser() {
           if (!mapRef.current || !userLocationRef.current) return;
+          const coords = smoothedPositionRef.current ?? userLocationRef.current;
+          const mapHeight = mapRef.current.getContainer().clientHeight || 600;
+          const bottomPad = Math.round(mapHeight * 0.35);
+
           mapRef.current.easeTo({
-            center: userLocationRef.current,
-            bearing: currentHeadingRef.current,
-            zoom: 15,
-            duration: 800,
+            center: coords,
+            bearing: cameraHeadingRef.current,
+            zoom: NAV_ZOOM,
+            padding: { top: 0, bottom: bottomPad, left: 0, right: 0 },
+            duration: NAV_RECENTER_DURATION,
             essential: true,
           });
         },

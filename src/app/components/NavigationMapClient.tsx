@@ -180,13 +180,12 @@ export default function NavigationMapClient() {
       setAppState('destinationSelected');
       setPinDestination(null);
       setShowReplacePrompt(null);
-      setFollowMode(false);
+      // Do NOT disable follow mode here — it will auto-enable when route is active
       if (mapRef.current) {
         mapRef.current.flyTo(result.coordinates, 15);
         mapRef.current.setDestinationMarker(result.coordinates);
         mapRef.current.setPinMarker(null);
         mapRef.current.setRoute(null);
-        // Clear alt routes
         mapRef.current.setAlternativeRoutes([], 0);
       }
     },
@@ -217,6 +216,8 @@ export default function NavigationMapClient() {
         geometry: alternatives[fastestIdx].geometry,
       });
       setAppState('routeActive');
+      // Auto-enable follow mode when navigation starts
+      setFollowMode(true);
 
       if (mapRef.current) {
         mapRef.current.setAlternativeRoutes(alternatives, fastestIdx);
@@ -341,7 +342,6 @@ export default function NavigationMapClient() {
         geometry: alternatives[fastestIdx].geometry,
       });
 
-      // Convert pin to a "destination" for the route panel
       const pinResult: SearchResult = {
         id: `pin-${pinDestination.coordinates[0]}-${pinDestination.coordinates[1]}`,
         name: pinDestination.address ?? t.tapDestination,
@@ -352,6 +352,8 @@ export default function NavigationMapClient() {
       setSelectedDestination(pinResult);
       setAppState('routeActive');
       setPinDestination(null);
+      // Auto-enable follow mode when navigation starts
+      setFollowMode(true);
 
       if (mapRef.current) {
         mapRef.current.setPinMarker(null);
