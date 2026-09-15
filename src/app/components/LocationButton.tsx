@@ -18,8 +18,8 @@ export default function LocationButton({ onLocate, t, followMode = false }: Loca
         'transition-all duration-150',
         'active:scale-95',
         'shadow-xl shadow-black/40',
-        'flex flex-col items-center justify-center gap-0.5',
-        'px-2 py-2 min-w-[52px]',
+        'flex items-center justify-center',
+        'w-[52px] h-[52px]',
         followMode
           ? 'text-primary bg-primary/20 border border-primary/40' :'text-foreground hover:text-primary hover:bg-muted/60 active:bg-muted',
       ].join(' ')}
@@ -39,16 +39,6 @@ export default function LocationButton({ onLocate, t, followMode = false }: Loca
       >
         <polygon points="3 11 22 2 13 21 11 13 3 11" />
       </svg>
-      {/* Label: "ჩემი მდებარეობა" / "My Location" — compact two-line */}
-      <span
-        className={[
-          'text-[8px] font-semibold leading-tight text-center max-w-[48px] break-words',
-          followMode ? 'text-primary' : 'text-muted-foreground',
-        ].join(' ')}
-        style={{ wordBreak: 'break-word', hyphens: 'auto' }}
-      >
-        {t.locateMe}
-      </span>
     </button>
   );
 }

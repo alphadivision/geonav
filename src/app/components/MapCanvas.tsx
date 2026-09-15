@@ -65,6 +65,7 @@ export interface MapCanvasHandle {
   zoomIn: () => void;
   zoomOut: () => void;
   locateUser: () => void;
+  locateUserAt: (coords: [number, number]) => void;
   setMapStyle: (style: MapStyle) => void;
 }
 
@@ -980,6 +981,25 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         locateUser() {
           if (!mapRef.current || !userLocationRef.current) return;
           const coords = smoothedPositionRef.current ?? userLocationRef.current;
+          const mapHeight = mapRef.current.getContainer().clientHeight || 600;
+          const bottomPad = Math.round(mapHeight * 0.35);
+
+          mapRef.current.easeTo({
+            center: coords,
+            bearing: cameraHeadingRef.current,
+            zoom: NAV_ZOOM,
+            padding: { top: 0, bottom: bottomPad, left: 0, right: 0 },
+            duration: NAV_RECENTER_DURATION,
+            essential: true,
+          });
+        },
+
+        locateUserAt(coords: [number, number]) {
+          if (!mapRef.current) return;
+          // Update internal refs so follow mode uses the fresh position
+          userLocationRef.current = coords;
+          smoothedPositionRef.current = coords;
+
           const mapHeight = mapRef.current.getContainer().clientHeight || 600;
           const bottomPad = Math.round(mapHeight * 0.35);
 

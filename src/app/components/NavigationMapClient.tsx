@@ -6,6 +6,7 @@ import dynamic from 'next/dynamic';
 import type { Language } from '@/lib/i18n';
 import type { MapStyle } from '@/types';
 import { getStoredLanguage, setStoredLanguage, getTranslations, TRAFFIC_KEY } from '@/lib/i18n';
+import { getCurrentPosition } from '@/lib/geolocation';
 import type {
   SearchResult,
   RouteInfo,
@@ -24,7 +25,7 @@ import DestinationCard from './DestinationCard';
 import ErrorToast from './ErrorToast';
 import LoadingOverlay from './LoadingOverlay';
 import MapStyleSwitcher, { getStoredMapStyle, setStoredMapStyle } from './MapStyleSwitcher';
-import TrafficButton from './TrafficButton';
+
 import RouteAlternativesPanel from './RouteAlternativesPanel';
 import PinDestinationCard from './PinDestinationCard';
 import RecenterButton from './RecenterButton';
@@ -423,10 +424,51 @@ export default function NavigationMapClient() {
     setMapZoom((z) => Math.max(z - 1, 1));
   }, []);
 
-  // Location button: restore follow mode + fly to user
+  // Location button: use getCurrentPosition for a fresh GPS fix, fall back to cached if inaccurate
   const handleLocateMe = useCallback(() => {
+    // Always restore follow mode immediately
     setFollowMode(true);
-    if (mapRef.current) mapRef.current.locateUser();
+
+    // Request a fresh GPS fix
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude, accuracy, heading } = position.coords;
+
+        // Debug log
+        console.log(
+          '[GeoNav GPS locate]',
+          `lat=${latitude.toFixed(7)}`,
+          `lng=${longitude.toFixed(7)}`,
+          `accuracy=${accuracy != null ? accuracy.toFixed(1) + 'm' : 'n/a'}`,
+          `timestamp=${new Date(position.timestamp).toISOString()}`
+        );
+
+        // If accuracy is acceptable, use fresh fix; otherwise fall back to last known position
+        const MAX_ACCURACY = 200;
+        if (accuracy != null && accuracy <= MAX_ACCURACY) {
+          const freshLocation = { lat: latitude, lng: longitude, accuracy, heading: heading ?? undefined };
+          setUserLocation(freshLocation);
+          if (mapRef.current) {
+            mapRef.current.setUserMarker([longitude, latitude]);
+            mapRef.current.locateUserAt([longitude, latitude]);
+          }
+        } else {
+          // Poor accuracy — just recenter on last known position
+          console.warn(`[GeoNav GPS locate] Poor accuracy (${accuracy?.toFixed(1)}m), using last known position`);
+          if (mapRef.current) mapRef.current.locateUser();
+        }
+      },
+      (err) => {
+        console.warn('[GeoNav GPS locate] getCurrentPosition error:', err.message);
+        // Fall back to last known position
+        if (mapRef.current) mapRef.current.locateUser();
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 8000,
+        maximumAge: 0,
+      }
+    );
   }, []);
 
   const handleRecenter = useCallback(() => {
@@ -498,7 +540,7 @@ export default function NavigationMapClient() {
         </div>
       </div>
 
-      {/* Right side controls: zoom + traffic + map style + locate + recenter */}
+      {/* Right side controls: zoom + recenter + map style + locate */}
       <div
         className="fixed right-3 sm:right-5 bottom-4 z-panel flex flex-col gap-2"
         data-no-map-tap
@@ -509,10 +551,10 @@ export default function NavigationMapClient() {
           t={t}
         />
         <div className="h-2" />
-        <TrafficButton
-          trafficEnabled={trafficEnabled}
-          onToggle={handleTrafficToggle}
+        <RecenterButton
+          onRecenter={handleRecenter}
           t={t}
+          followMode={followMode}
         />
         <MapStyleSwitcher
           currentStyle={mapStyle}
@@ -522,11 +564,6 @@ export default function NavigationMapClient() {
         <div className="h-1" />
         <LocationButton
           onLocate={handleLocateMe}
-          t={t}
-          followMode={followMode}
-        />
-        <RecenterButton
-          onRecenter={handleRecenter}
           t={t}
           followMode={followMode}
         />
