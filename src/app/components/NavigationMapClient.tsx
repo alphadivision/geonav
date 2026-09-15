@@ -436,53 +436,73 @@ export default function NavigationMapClient() {
     // Always restore follow mode immediately
     setFollowMode(true);
 
-    // Request a fresh GPS fix
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude, accuracy, heading } = position.coords;
+    // Request a fresh GPS fix — two-stage strategy to avoid Code 3 timeouts:
+    // Stage 1: high-accuracy with maximumAge=30s so a recent watchPosition fix
+    //          can be reused immediately (no GPS cold-start needed).
+    // Stage 2: if Stage 1 times out, retry with low-accuracy (network/WiFi)
+    //          which responds in milliseconds on Tesla and mobile browsers.
+    const applyPosition = (position: GeolocationPosition) => {
+      const { latitude, longitude, accuracy, heading } = position.coords;
 
-        // Debug log
-        console.log(
-          '[GeoNav GPS locate] SUCCESS',
-          `lat=${latitude.toFixed(7)}`,
-          `lng=${longitude.toFixed(7)}`,
-          `accuracy=${accuracy != null ? accuracy.toFixed(1) + 'm' : 'n/a'}`,
-          `timestamp=${new Date(position.timestamp).toISOString()}`
-        );
+      console.log(
+        '[GeoNav GPS locate] SUCCESS',
+        `lat=${latitude.toFixed(7)}`,
+        `lng=${longitude.toFixed(7)}`,
+        `accuracy=${accuracy != null ? accuracy.toFixed(1) + 'm' : 'n/a'}`,
+        `timestamp=${new Date(position.timestamp).toISOString()}`
+      );
 
-        // If accuracy is acceptable, use fresh fix; otherwise fall back to last known position
-        const MAX_ACCURACY = 200;
-        if (accuracy != null && accuracy <= MAX_ACCURACY) {
-          const freshLocation = { lat: latitude, lng: longitude, accuracy, heading: heading ?? undefined };
-          setUserLocation(freshLocation);
-          if (mapRef.current) {
-            mapRef.current.setUserMarker([longitude, latitude]);
-            mapRef.current.locateUserAt([longitude, latitude]);
-          }
-        } else {
-          // Poor accuracy — just recenter on last known position
-          console.warn(`[GeoNav GPS locate] Poor accuracy (${accuracy?.toFixed(1)}m), using last known position`);
-          if (mapRef.current) mapRef.current.locateUser();
+      const MAX_ACCURACY = 200;
+      if (accuracy != null && accuracy <= MAX_ACCURACY) {
+        const freshLocation = { lat: latitude, lng: longitude, accuracy, heading: heading ?? undefined };
+        setUserLocation(freshLocation);
+        if (mapRef.current) {
+          mapRef.current.setUserMarker([longitude, latitude]);
+          mapRef.current.locateUserAt([longitude, latitude]);
         }
-      },
-      (err) => {
-        // Handle all geolocation error codes explicitly
-        if (err.code === 1) {
-          console.error('[GeoNav GPS locate] PERMISSION_DENIED — user denied geolocation access. Code:', err.code, err.message);
-        } else if (err.code === 2) {
-          console.error('[GeoNav GPS locate] POSITION_UNAVAILABLE — device cannot determine location. Code:', err.code, err.message);
-        } else if (err.code === 3) {
-          console.error('[GeoNav GPS locate] TIMEOUT — geolocation request timed out. Code:', err.code, err.message);
-        } else {
-          console.error('[GeoNav GPS locate] Unknown error. Code:', err.code, err.message);
-        }
-        // Fall back to last known position
+      } else {
+        console.warn(`[GeoNav GPS locate] Poor accuracy (${accuracy?.toFixed(1)}m), using last known position`);
         if (mapRef.current) mapRef.current.locateUser();
-      },
+      }
+    };
+
+    const handleGeoError = (err: GeolocationPositionError, stage: number) => {
+      if (stage === 1 && err.code === 3) {
+        // Stage 1 timed out — retry without high-accuracy (network/WiFi fallback)
+        console.warn('[GeoNav GPS locate] Stage 1 timed out, retrying with low-accuracy fallback…');
+        navigator.geolocation.getCurrentPosition(
+          applyPosition,
+          (err2) => {
+            console.error('[GeoNav GPS locate] Stage 2 error. Code:', err2.code, err2.message);
+            if (mapRef.current) mapRef.current.locateUser();
+          },
+          {
+            enableHighAccuracy: false,
+            timeout: 10000,
+            maximumAge: 60000,
+          }
+        );
+        return;
+      }
+      if (err.code === 1) {
+        console.error('[GeoNav GPS locate] PERMISSION_DENIED — user denied geolocation access. Code:', err.code, err.message);
+      } else if (err.code === 2) {
+        console.error('[GeoNav GPS locate] POSITION_UNAVAILABLE — device cannot determine location. Code:', err.code, err.message);
+      } else if (err.code === 3) {
+        console.error('[GeoNav GPS locate] TIMEOUT — geolocation request timed out. Code:', err.code, err.message);
+      } else {
+        console.error('[GeoNav GPS locate] Unknown error. Code:', err.code, err.message);
+      }
+      if (mapRef.current) mapRef.current.locateUser();
+    };
+
+    navigator.geolocation.getCurrentPosition(
+      applyPosition,
+      (err) => handleGeoError(err, 1),
       {
         enableHighAccuracy: true,
-        timeout: 20000,
-        maximumAge: 5000,
+        timeout: 15000,
+        maximumAge: 30000, // reuse a recent watchPosition fix — avoids GPS cold-start timeout
       }
     );
   }, []);
