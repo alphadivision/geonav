@@ -10,7 +10,15 @@ const nextConfig = {
     ignoreDuringBuilds: true,
   },
   env: {
-    NEXT_PUBLIC_MAPBOX_TOKEN: process.env.MAPBOX_ACCESS_TOKEN,
+    // Forward the server-side MAPBOX_ACCESS_TOKEN to the client bundle.
+    // IMPORTANT: On Vercel you must ALSO add NEXT_PUBLIC_MAPBOX_TOKEN as a
+    // separate environment variable (same value as MAPBOX_ACCESS_TOKEN) so
+    // that Next.js can inline it into the client bundle at build time.
+    // The env block below acts as a fallback for local development.
+    NEXT_PUBLIC_MAPBOX_TOKEN:
+      process.env.NEXT_PUBLIC_MAPBOX_TOKEN ||
+      process.env.MAPBOX_ACCESS_TOKEN ||
+      '',
   },
   images: {
     remotePatterns: imageHosts,
