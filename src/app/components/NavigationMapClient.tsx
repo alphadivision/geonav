@@ -492,7 +492,7 @@ export default function NavigationMapClient() {
 
       {/* Right side controls: zoom + traffic + map style + locate */}
       <div
-        className="fixed right-3 sm:right-5 bottom-36 sm:bottom-40 z-panel flex flex-col gap-2"
+        className="fixed right-3 sm:right-5 bottom-4 z-panel flex flex-col gap-2"
         data-no-map-tap
       >
         <ZoomControls
@@ -525,8 +525,11 @@ export default function NavigationMapClient() {
           className="fixed bottom-0 left-0 right-0 z-panel bottom-sheet-enter"
           data-no-map-tap
         >
-          <div className="glass-dark border-t border-border/40 shadow-2xl shadow-black/60 px-4 py-4">
-            <p className="text-sm font-semibold text-foreground mb-3 text-center">
+          <div
+            className="mx-3 mb-3 rounded-2xl shadow-2xl shadow-black/70 px-4 py-4"
+            style={{ backdropFilter: 'blur(16px)', background: 'rgba(18,18,24,0.88)', border: '1px solid rgba(255,255,255,0.10)' }}
+          >
+            <p className="text-sm font-semibold text-white mb-3 text-center">
               {t.replaceDestination}
             </p>
             <div className="flex gap-3">
