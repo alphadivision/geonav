@@ -14,7 +14,7 @@ export default function RecenterButton({ onRecenter, t, followMode }: RecenterBu
     <button
       onClick={onRecenter}
       className={[
-        'glass-dark rounded-2xl touch-target-lg',
+        'glass-dark rounded-2xl',
         'transition-all duration-150',
         'active:scale-95',
         'shadow-xl shadow-black/40',
