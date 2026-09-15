@@ -7,10 +7,12 @@ import type { Translations } from '@/lib/i18n';
 interface ErrorToastProps {
   message: string;
   onDismiss: () => void;
-  t: Translations;
+  t?: Translations;
 }
 
 export default function ErrorToast({ message, onDismiss, t }: ErrorToastProps) {
+  const closeLabel = t?.close ?? 'Close';
+
   // Auto-dismiss after 5 seconds
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -38,7 +40,7 @@ export default function ErrorToast({ message, onDismiss, t }: ErrorToastProps) {
       <button
         onClick={onDismiss}
         className="flex-shrink-0 touch-target rounded-xl text-muted-foreground hover:text-foreground transition-colors duration-150 active:scale-95"
-        aria-label={t.close}
+        aria-label={closeLabel}
       >
         <X size={18} />
       </button>
