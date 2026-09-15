@@ -424,65 +424,56 @@ export default function NavigationMapClient() {
     setMapZoom((z) => Math.max(z - 1, 1));
   }, []);
 
-  // Location button: use getCurrentPosition for a fresh GPS fix, fall back to cached if inaccurate
+  // Location button: use the already-tracked watchPosition location immediately,
+  // falling back to getCurrentPosition only if no location is known yet.
   const handleLocateMe = useCallback(() => {
-    // Guard: geolocation API must be available
-    if (!navigator.geolocation) {
-      console.error('[GeoNav GPS locate] navigator.geolocation is not available in this browser/context');
-      if (mapRef.current) mapRef.current.locateUser();
-      return;
-    }
-
     // Always restore follow mode immediately
     setFollowMode(true);
 
-    // Request a fresh GPS fix
+    // Primary path: use the location already tracked by watchPosition in MapCanvas.
+    // locateUser() reads userLocationRef which is kept up-to-date by the continuous
+    // watchPosition watcher — no GPS cold-start, no timeout risk.
+    if (mapRef.current) {
+      // If we have a known location, center on it right away
+      const knownLocation = userLocationRef.current;
+      if (knownLocation) {
+        mapRef.current.locateUserAt([knownLocation.lng, knownLocation.lat]);
+        return;
+      }
+
+      // No location yet — try locateUser() which will use whatever MapCanvas has
+      mapRef.current.locateUser();
+    }
+
+    // Fallback: request a fresh GPS fix only when watchPosition hasn't produced
+    // a location yet (e.g. very first app load before any fix arrives).
+    if (!navigator.geolocation) {
+      console.warn('[GeoNav GPS locate] navigator.geolocation not available');
+      return;
+    }
+
+    const applyPosition = (position: GeolocationPosition) => {
+      const { latitude, longitude, accuracy, heading } = position.coords;
+      const freshLocation = { lat: latitude, lng: longitude, accuracy: accuracy ?? undefined, heading: heading ?? undefined };
+      setUserLocation(freshLocation);
+      if (mapRef.current) {
+        mapRef.current.setUserMarker([longitude, latitude]);
+        mapRef.current.locateUserAt([longitude, latitude]);
+      }
+    };
+
+    // Use low-accuracy first (fast, network-based) to avoid GPS cold-start timeouts
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude, accuracy, heading } = position.coords;
-
-        // Debug log
-        console.log(
-          '[GeoNav GPS locate] SUCCESS',
-          `lat=${latitude.toFixed(7)}`,
-          `lng=${longitude.toFixed(7)}`,
-          `accuracy=${accuracy != null ? accuracy.toFixed(1) + 'm' : 'n/a'}`,
-          `timestamp=${new Date(position.timestamp).toISOString()}`
-        );
-
-        // If accuracy is acceptable, use fresh fix; otherwise fall back to last known position
-        const MAX_ACCURACY = 200;
-        if (accuracy != null && accuracy <= MAX_ACCURACY) {
-          const freshLocation = { lat: latitude, lng: longitude, accuracy, heading: heading ?? undefined };
-          setUserLocation(freshLocation);
-          if (mapRef.current) {
-            mapRef.current.setUserMarker([longitude, latitude]);
-            mapRef.current.locateUserAt([longitude, latitude]);
-          }
-        } else {
-          // Poor accuracy — just recenter on last known position
-          console.warn(`[GeoNav GPS locate] Poor accuracy (${accuracy?.toFixed(1)}m), using last known position`);
-          if (mapRef.current) mapRef.current.locateUser();
-        }
-      },
+      applyPosition,
       (err) => {
-        // Handle all geolocation error codes explicitly
-        if (err.code === 1) {
-          console.error('[GeoNav GPS locate] PERMISSION_DENIED — user denied geolocation access. Code:', err.code, err.message);
-        } else if (err.code === 2) {
-          console.error('[GeoNav GPS locate] POSITION_UNAVAILABLE — device cannot determine location. Code:', err.code, err.message);
-        } else if (err.code === 3) {
-          console.error('[GeoNav GPS locate] TIMEOUT — geolocation request timed out. Code:', err.code, err.message);
-        } else {
-          console.error('[GeoNav GPS locate] Unknown error. Code:', err.code, err.message);
-        }
-        // Fall back to last known position
+        console.warn('[GeoNav GPS locate] Fallback getCurrentPosition failed. Code:', err.code, err.message);
+        // Last resort: use whatever MapCanvas has
         if (mapRef.current) mapRef.current.locateUser();
       },
       {
-        enableHighAccuracy: true,
-        timeout: 20000,
-        maximumAge: 5000,
+        enableHighAccuracy: false,
+        timeout: 8000,
+        maximumAge: 60000,
       }
     );
   }, []);
