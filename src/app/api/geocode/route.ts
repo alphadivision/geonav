@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Backend integration point: Google Places Text Search + Geocoding API
+// Backend integration point: Google Places API (New) - Text Search
 // Env: NEXT_PUBLIC_GOOGLE_MAPS_API_KEY (also readable server-side)
 
 const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -22,53 +22,69 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const encodedQuery = encodeURIComponent(query.trim() + ' Georgia');
     const language = lang === 'ka' ? 'ka' : 'en';
+    const textQuery = query.trim() + ' Georgia';
 
-    // Use Google Places Text Search API
-    const url = [
-      `https://maps.googleapis.com/maps/api/place/textsearch/json`,
-      `?query=${encodedQuery}`,
-      `&key=${GOOGLE_API_KEY}`,
-      `&language=${language}`,
-      `&region=ge`,
-    ].join('');
+    // Use Places API (New) - Text Search
+    const url = 'https://places.googleapis.com/v1/places:searchText';
+
+    const requestBody = {
+      textQuery,
+      languageCode: language,
+      regionCode: 'GE',
+      pageSize: 8,
+      locationBias: {
+        rectangle: {
+          low: { latitude: 41.0, longitude: 40.0 },
+          high: { latitude: 43.6, longitude: 46.7 },
+        },
+      },
+    };
 
     const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': GOOGLE_API_KEY,
+        'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.types,places.primaryType',
+      },
+      body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(8000),
     });
 
     if (!response.ok) {
-      throw new Error(`Google Places error: ${response.status}`);
+      const errText = await response.text();
+      throw new Error(`Places API (New) error: ${response.status} - ${errText}`);
     }
 
     const data = await response.json();
 
-    if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
-      throw new Error(`Google Places status: ${data.status}`);
-    }
-
-    // Transform Google Places response to match existing GeocodingFeature shape
-    const features = (data.results || []).slice(0, 8).map((place: {
-      place_id: string;
-      name: string;
-      formatted_address: string;
-      geometry: { location: { lat: number; lng: number } };
+    // Transform Places API (New) response to match existing GeocodingFeature shape
+    const places = data.places || [];
+    const features = places.map((place: {
+      id: string;
+      displayName?: { text: string; languageCode?: string };
+      formattedAddress?: string;
+      location?: { latitude: number; longitude: number };
       types?: string[];
+      primaryType?: string;
     }) => {
-      const [lng, lat] = [place.geometry.location.lng, place.geometry.location.lat];
-      const placeType = place.types?.[0] || 'place';
+      const lat = place.location?.latitude ?? 0;
+      const lng = place.location?.longitude ?? 0;
+      const name = place.displayName?.text || place.formattedAddress || '';
+      const address = place.formattedAddress || name;
+      const placeType = place.primaryType || place.types?.[0] || 'place';
       const category = place.types?.find((t: string) =>
-        ['restaurant', 'fuel', 'lodging', 'airport', 'store', 'hospital'].includes(t)
+        ['restaurant', 'gas_station', 'lodging', 'airport', 'store', 'hospital'].includes(t)
       );
 
       return {
-        id: place.place_id,
+        id: place.id,
         type: 'Feature',
-        place_name: place.formatted_address,
-        place_name_ka: place.formatted_address,
-        text: place.name,
-        text_ka: place.name,
+        place_name: address,
+        place_name_ka: address,
+        text: name,
+        text_ka: name,
         properties: {
           category: category || placeType,
           maki: placeType,
