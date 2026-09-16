@@ -3,7 +3,9 @@ import { NextRequest, NextResponse } from 'next/server';
 // Backend integration point: Google Places API (New) - Text Search
 // Env: NEXT_PUBLIC_GOOGLE_MAPS_API_KEY (also readable server-side)
 
-const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+const GOOGLE_API_KEY =
+  process.env.GOOGLE_MAPS_SERVER_KEY ||
+  process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);

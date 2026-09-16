@@ -31,6 +31,12 @@ import PinDestinationCard from './PinDestinationCard';
 import RecenterButton from './RecenterButton';
 import type { MapCanvasHandle } from './MapCanvas';
 
+declare const google: typeof import('@types/google.maps') extends never
+  ? any
+  : typeof globalThis extends { google: infer G }
+  ? G
+  : any;
+
 const MapCanvas = dynamic(() => import('./MapCanvas'), {
   ssr: false,
   loading: () => (
@@ -150,11 +156,76 @@ export default function NavigationMapClient() {
   );
 
   // Fetch routes and build alternatives
+  // Primary: Google Maps DirectionsService (client-side, uses loaded Maps JS API — no referrer issues)
+  // Fallback: /api/directions server route
   const fetchRoutes = useCallback(
     async (
       origin: UserLocation,
       destCoords: [number, number]
     ): Promise<RouteAlternative[] | null> => {
+      // Try client-side Google Maps DirectionsService first
+      if (typeof window !== 'undefined' && window.google?.maps?.DirectionsService) {
+        try {
+          const svc = new google.maps.DirectionsService();
+          const result = await new Promise<google.maps.DirectionsResult>((resolve, reject) => {
+            svc.route(
+              {
+                origin: { lat: origin.lat, lng: origin.lng },
+                destination: { lat: destCoords[1], lng: destCoords[0] },
+                travelMode: google.maps.TravelMode.DRIVING,
+                provideRouteAlternatives: true,
+                unitSystem: google.maps.UnitSystem.METRIC,
+              },
+              (result, status) => {
+                if (status === google.maps.DirectionsStatus.OK && result) {
+                  resolve(result);
+                } else {
+                  reject(new Error(`DirectionsService status: ${status}`));
+                }
+              }
+            );
+          });
+
+          if (!result.routes || result.routes.length === 0) throw new Error('No routes');
+
+          // Convert Google DirectionsResult to RouteAlternative[]
+          const alternatives: RouteAlternative[] = result.routes.map((route, index) => {
+            const leg = route.legs[0];
+            const distanceMeters = leg.distance?.value ?? 0;
+            const durationSeconds = leg.duration?.value ?? 0;
+
+            // Extract path coordinates from overview_path
+            const coordinates: [number, number][] = route.overview_path.map((p) => [
+              p.lng(),
+              p.lat(),
+            ]);
+
+            return {
+              index,
+              distance: distanceMeters,
+              duration: durationSeconds,
+              geometry: {
+                type: 'LineString',
+                coordinates,
+              },
+              roadType: 'mainRoad' as const,
+              isFastest: index === 0,
+            };
+          });
+
+          // Mark fastest
+          const minDuration = Math.min(...alternatives.map((a) => a.duration));
+          alternatives.forEach((a) => {
+            a.isFastest = a.duration === minDuration;
+          });
+
+          return alternatives;
+        } catch (clientErr) {
+          console.warn('[route] DirectionsService failed, falling back to server API:', clientErr);
+        }
+      }
+
+      // Fallback: server-side /api/directions
       const params = new URLSearchParams({
         olng: origin.lng.toString(),
         olat: origin.lat.toString(),
