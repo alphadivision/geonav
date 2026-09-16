@@ -42,6 +42,8 @@ interface MapProps {
   debugTileBounds?: Array<{ bounds: MapBounds; ageMs: number }>;
   // 3D terrain mode
   use3DMode?: boolean;
+  // Turn-by-turn navigation is actively running (route selected, destination set)
+  isNavigating?: boolean;
 }
 
 export interface MapRef {
@@ -246,6 +248,7 @@ export const Map = forwardRef<MapRef, MapProps>(function Map(
     alertRadiusMeters = 500,
     debugTileBounds,
     use3DMode = false,
+    isNavigating = false,
   },
   ref
 ) {
@@ -319,6 +322,21 @@ export const Map = forwardRef<MapRef, MapProps>(function Map(
       }
     }
   }, [followMode, mapLoaded]);
+
+  // Turn-by-turn look-ahead: shift the visual center toward the bottom of the
+  // screen while actively navigating, so more of the upcoming route ahead of
+  // the user is visible (matches Google Maps / Tesla nav camera behavior).
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+
+    const containerHeight = mapContainer.current?.clientHeight ?? 0;
+    const bottomPadding = isNavigating ? Math.round(containerHeight * 0.35) : 0;
+
+    map.current.easeTo({
+      padding: { top: 0, bottom: bottomPadding, left: 0, right: 0 },
+      duration: 600,
+    });
+  }, [isNavigating, mapLoaded]);
 
   // Expose methods to parent
   useImperativeHandle(ref, () => ({
@@ -1275,23 +1293,26 @@ export const Map = forwardRef<MapRef, MapProps>(function Map(
   useEffect(() => {
     if (!map.current || !mapLoaded || !userLocation) return;
 
-    const avatarSrc = isDarkMode ? "/maps-avatar.jpg" : "/maps-avatar-light.jpg";
     const initialHeading = userLocation.effectiveHeading ?? userLocation.heading ?? 0;
 
     if (!userMarkerRef.current) {
       const el = document.createElement("div");
       el.className = "user-marker";
       userMarkerElRef.current = el;
-      
+
       // Initial 3D tilt if in 3D mode
       const initialTilt = use3DMode ? 'rotateX(45deg)' : '';
-      
-      // Create simple marker - just the avatar that rotates
+
+      // Tesla-style navigation puck: a directional chevron that always
+      // points toward the direction of travel (rotates with heading).
       // Add perspective to container for 3D transforms and transform-style for nested 3D
       el.innerHTML = `
         <div class="user-avatar-container" style="perspective: 100px; transform-style: preserve-3d;">
           <div class="user-avatar" style="transform: translate(-50%, -50%) ${initialTilt} rotate(${initialHeading}deg); transform-style: preserve-3d;">
-            <img src="${avatarSrc}" alt="You" />
+            <svg class="nav-arrow" width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="20" cy="20" r="17" fill="#1a73e8" stroke="#ffffff" stroke-width="3"/>
+              <path d="M20 9 L29 28 L20 23 L11 28 Z" fill="#ffffff"/>
+            </svg>
           </div>
           ${showAvatarPulse ? '<div class="user-avatar-pulse"></div>' : ''}
         </div>
@@ -1300,25 +1321,14 @@ export const Map = forwardRef<MapRef, MapProps>(function Map(
       userMarkerRef.current = new mapboxgl.Marker({ element: el })
         .setLngLat([userLocation.longitude, userLocation.latitude])
         .addTo(map.current);
-        
+
       // Initialize position refs
       currentPositionRef.current = { lng: userLocation.longitude, lat: userLocation.latitude };
       targetPositionRef.current = { lng: userLocation.longitude, lat: userLocation.latitude };
       currentHeadingRef.current = initialHeading;
       targetHeadingRef.current = initialHeading;
     }
-  }, [userLocation, mapLoaded, isDarkMode]);
-
-  // Update avatar image when dark mode changes
-  useEffect(() => {
-    if (!userMarkerRef.current) return;
-    
-    const avatarSrc = isDarkMode ? "/maps-avatar.jpg" : "/maps-avatar-light.jpg";
-    const img = userMarkerRef.current.getElement().querySelector("img");
-    if (img) {
-      img.src = avatarSrc;
-    }
-  }, [isDarkMode]);
+  }, [userLocation, mapLoaded]);
 
   // Update pulse visibility when setting changes
   useEffect(() => {
@@ -2205,16 +2215,16 @@ export const Map = forwardRef<MapRef, MapProps>(function Map(
           position: absolute;
           top: 50%;
           left: 50%;
-          width: 48px;
-          height: 48px;
+          width: 40px;
+          height: 40px;
           z-index: 3;
           transition: transform 0.1s ease-out;
         }
-        
-        .user-avatar img {
+
+        .user-avatar .nav-arrow {
           width: 100%;
           height: 100%;
-          object-fit: cover;
+          filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
         }
         
         .user-avatar-pulse {

@@ -395,7 +395,7 @@ export function SettingsModal({
                     <div>
                       <div className="text-lg font-medium">Location Pulse</div>
                       <div className={`text-base ${isDarkMode ? "text-gray-400" : "text-gray-500"}`}>
-                        Animated pulse around your avatar
+                        Animated pulse around your location marker
                       </div>
                     </div>
                   </div>

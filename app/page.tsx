@@ -376,7 +376,18 @@ function LiveHome() {
     if (latitude && longitude) {
       lastRouteOriginRef.current = { lat: latitude, lng: longitude };
     }
-    
+
+    // Turn-by-turn navigation should center and rotate the camera on the
+    // driver's heading automatically, like Google Maps / Tesla nav.
+    setFollowMode(true);
+    if (mapRef.current) {
+      mapRef.current.setFollowMode(true);
+      mapRef.current.enableAutoCentering();
+    }
+    if (typeof window !== "undefined") {
+      localStorage.setItem("teslanav-follow-mode", "true");
+    }
+
     posthog.capture("navigation_started_from_preview", {
       place_name: previewLocation.name,
       selected_route_index: selectedRouteIndex,
@@ -952,6 +963,7 @@ function LiveHome() {
         alertRadiusMeters={policeAlertDistance}
         debugTileBounds={isDevMode ? cachedTileBounds : undefined}
         use3DMode={use3DMode}
+        isNavigating={!!destination}
       />
 
       {/* Context Menu - Shows on long press */}
