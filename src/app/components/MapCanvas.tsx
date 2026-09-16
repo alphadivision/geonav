@@ -7,8 +7,7 @@ import React, {
   forwardRef,
   useCallback,
 } from 'react';
-import { Loader } from '@googlemaps/js-api-loader';
-import type { Libraries } from '@googlemaps/js-api-loader';
+import { setOptions, importLibrary } from '@googlemaps/js-api-loader';
 import type { UserLocation, MapStyle, RouteAlternative } from '@/types';
 import type { Language } from '@/lib/i18n';
 import {
@@ -18,6 +17,8 @@ import {
   smoothHeading,
 } from '@/lib/mapbox';
 import { watchPosition, clearWatch } from '@/lib/geolocation';
+
+/// <reference types="@types/google.maps" />
 
 const MIN_MOVEMENT_FOR_BEARING = 3;
 const HEADING_SMOOTH_ALPHA = 0.3;
@@ -317,7 +318,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         return;
       }
 
-      const loader = new Loader({
+      setOptions({
         apiKey,
         version: 'weekly',
         libraries: ['places', 'geometry'],
@@ -326,10 +327,16 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       let map: google.maps.Map;
       let cleanedUp = false;
 
-      loader.load().then(() => {
+      Promise.all([
+        importLibrary('maps'),
+        importLibrary('places'),
+        importLibrary('geometry'),
+      ]).then(([mapsLib]) => {
         if (cleanedUp || !containerRef.current) return;
 
-        map = new google.maps.Map(containerRef.current, {
+        const { Map } = mapsLib as google.maps.MapsLibrary;
+
+        map = new Map(containerRef.current, {
           center: { lat: GEORGIA_CENTER[1], lng: GEORGIA_CENTER[0] },
           zoom: 7,
           minZoom: 3,
