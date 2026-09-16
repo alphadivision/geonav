@@ -19,6 +19,7 @@ import {
 import { watchPosition, clearWatch } from '@/lib/geolocation';
 
 /// <reference types="@types/google.maps" />
+declare const google: typeof globalThis.google;
 
 const MIN_MOVEMENT_FOR_BEARING = 3;
 const HEADING_SMOOTH_ALPHA = 0.3;
@@ -319,7 +320,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       }
 
       setOptions({
-        apiKey,
+        key: apiKey,
         version: 'weekly',
         libraries: ['places', 'geometry'],
       });
@@ -790,10 +791,26 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         },
 
         locateUser() {
-          if (!mapRef.current || !userLocationRef.current) return;
-          const coords = smoothedPositionRef.current ?? userLocationRef.current;
-          mapRef.current.panTo({ lat: coords[1], lng: coords[0] });
-          mapRef.current.setZoom(NAV_ZOOM);
+          if (!mapRef.current) return;
+          if (userLocationRef.current) {
+            const coords = smoothedPositionRef.current ?? userLocationRef.current;
+            mapRef.current.panTo({ lat: coords[1], lng: coords[0] });
+            mapRef.current.setZoom(NAV_ZOOM);
+          } else if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => {
+                const coords: [number, number] = [pos.coords.longitude, pos.coords.latitude];
+                userLocationRef.current = coords;
+                smoothedPositionRef.current = coords;
+                if (mapRef.current) {
+                  mapRef.current.panTo({ lat: coords[1], lng: coords[0] });
+                  mapRef.current.setZoom(NAV_ZOOM);
+                }
+              },
+              () => { /* silently ignore — user may have denied */ },
+              { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            );
+          }
         },
 
         locateUserAt(coords: [number, number]) {
