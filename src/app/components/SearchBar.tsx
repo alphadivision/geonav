@@ -12,6 +12,8 @@ import type { Translations } from '@/lib/i18n';
 import type { SearchResult } from '@/types';
 import SearchResults from './SearchResults';
 
+/// <reference types="@types/google.maps" />
+
 declare global {
   interface Window {
     google: typeof google;
@@ -56,6 +58,7 @@ export default function SearchBar({
   const [isOpen, setIsOpen] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -301,6 +304,10 @@ export default function SearchBar({
   }, []);
 
   useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  useEffect(() => {
     if (query.trim().length >= 2) {
       performSearch(query);
     }
@@ -315,7 +322,7 @@ export default function SearchBar({
       <div
         className={[
           'glass-dark rounded-2xl overflow-hidden transition-all duration-200',
-          isFocused
+          isMounted && isFocused
             ? 'ring-2 ring-primary shadow-lg shadow-primary/20'
             : 'shadow-xl shadow-black/40',
         ].join(' ')}
@@ -323,7 +330,7 @@ export default function SearchBar({
         <div className="flex items-center px-4 py-0">
           {/* Search icon / loading spinner */}
           <div className="flex-shrink-0 mr-3">
-            {isLoading ? (
+            {isMounted && isLoading ? (
               <Loader2
                 size={22}
                 className="text-primary spinner"
@@ -332,7 +339,7 @@ export default function SearchBar({
             ) : (
               <Search
                 size={22}
-                className={isFocused ? 'text-primary' : 'text-muted-foreground'}
+                className={isMounted && isFocused ? 'text-primary' : 'text-muted-foreground'}
               />
             )}
           </div>
@@ -354,11 +361,11 @@ export default function SearchBar({
             spellCheck={false}
             aria-label={t.searchPlaceholder}
             aria-autocomplete="list"
-            aria-expanded={isOpen}
+            aria-expanded={isMounted ? isOpen : false}
           />
 
           {/* Clear button */}
-          {query.length > 0 && (
+          {isMounted && query.length > 0 && (
             <button
               onClick={handleClear}
               className="flex-shrink-0 ml-2 p-1.5 rounded-full hover:bg-white/10 transition-colors"
@@ -372,7 +379,7 @@ export default function SearchBar({
       </div>
 
       {/* Results dropdown */}
-      {isOpen && (
+      {isMounted && isOpen && (
         <div data-no-map-tap>
           <SearchResults
             results={results}
