@@ -102,6 +102,8 @@ export async function GET(request: NextRequest) {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': GOOGLE_API_KEY,
         'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.staticDuration,routes.polyline.encodedPolyline,routes.legs.distanceMeters,routes.legs.duration,routes.legs.steps.distanceMeters,routes.legs.steps.staticDuration,routes.legs.steps.navigationInstruction',
+        // Include Referer so browser-restricted API keys work from server-side
+        'Referer': process.env.NEXT_PUBLIC_SITE_URL || 'https://geonav4154.builtwithrocket.new',
       },
       body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(12000),
