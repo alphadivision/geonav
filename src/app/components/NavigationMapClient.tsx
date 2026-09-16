@@ -89,6 +89,45 @@ function buildRouteAlternatives(data: DirectionsResponse): RouteAlternative[] {
   }));
 }
 
+// Decode Google's encoded polyline format into [lng, lat] coordinate pairs
+function decodeEncodedPolyline(encoded: string): Array<[number, number]> {
+  const coords: Array<[number, number]> = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+  while (index < encoded.length) {
+    let b: number;
+    let shift = 0;
+    let result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlat = result & 1 ? ~(result >> 1) : result >> 1;
+    lat += dlat;
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlng = result & 1 ? ~(result >> 1) : result >> 1;
+    lng += dlng;
+    coords.push([lng / 1e5, lat / 1e5]);
+  }
+  return coords;
+}
+
+// Parse Routes API duration string like "165s" to seconds integer
+function parseDurSec(durationStr: string): number {
+  if (!durationStr) return 0;
+  const match = durationStr.match(/^(\d+(?:\.\d+)?)s$/);
+  if (match) return Math.round(parseFloat(match[1]));
+  return 0;
+}
+
 export default function NavigationMapClient() {
   const [language, setLanguage] = useState<Language>('ka');
   const [appState, setAppState] = useState<AppState>('idle');
@@ -156,13 +195,127 @@ export default function NavigationMapClient() {
   );
 
   // Fetch routes and build alternatives
-  // Uses /api/directions server route which calls Google Routes API v2
+  // PRIMARY: Call Google Routes API v2 directly from the browser.
+  // Browser-restricted API keys work here because the browser sets the real
+  // HTTP Referer header automatically — no server-side key needed.
   const fetchRoutes = useCallback(
     async (
       origin: UserLocation,
       destCoords: [number, number]
     ): Promise<RouteAlternative[] | null> => {
-      // Use server-side /api/directions which calls Google Routes API v2
+      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+
+      // --- PRIMARY: Direct browser → Routes API call ---
+      if (apiKey) {
+        try {
+          const url = 'https://routes.googleapis.com/directions/v2:computeRoutes';
+          const requestBody = {
+            origin: {
+              location: {
+                latLng: { latitude: origin.lat, longitude: origin.lng },
+              },
+            },
+            destination: {
+              location: {
+                latLng: { latitude: destCoords[1], longitude: destCoords[0] },
+              },
+            },
+            travelMode: 'DRIVE',
+            routingPreference: 'TRAFFIC_AWARE',
+            computeAlternativeRoutes: true,
+            languageCode: 'ka',
+            units: 'METRIC',
+          };
+
+          console.log('[fetchRoutes] Calling Routes API directly from browser:', requestBody);
+
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Goog-Api-Key': apiKey,
+              'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.staticDuration,routes.polyline.encodedPolyline,routes.legs.distanceMeters,routes.legs.duration,routes.legs.steps.distanceMeters,routes.legs.steps.staticDuration,routes.legs.steps.navigationInstruction',
+            },
+            body: JSON.stringify(requestBody),
+          });
+
+          const responseText = await res.text();
+          console.log(`[fetchRoutes] Routes API HTTP ${res.status}:`, responseText);
+
+          if (res.ok) {
+            const data = JSON.parse(responseText) as {
+              routes?: Array<{
+                distanceMeters: number;
+                duration: string;
+                staticDuration?: string;
+                polyline: { encodedPolyline: string };
+                legs?: Array<{
+                  distanceMeters: number;
+                  duration: string;
+                  steps?: Array<{
+                    distanceMeters: number;
+                    staticDuration?: string;
+                    navigationInstruction?: { instructions: string; maneuver: string };
+                    intersections?: Array<{ classes?: string[] }>;
+                  }>;
+                }>;
+              }>;
+            };
+
+            if (data.routes && data.routes.length > 0) {
+              // Decode encoded polyline and build DirectionsResponse shape
+              const decoded = data.routes.map((route, idx) => {
+                const coords = decodeEncodedPolyline(route.polyline.encodedPolyline);
+                const durationSec = parseDurSec(route.duration || route.staticDuration || '0s');
+                const leg = route.legs?.[0];
+                const steps = (leg?.steps || []).map((step) => ({
+                  maneuver: {
+                    instruction: step.navigationInstruction?.instructions || '',
+                    type: step.navigationInstruction?.maneuver?.toLowerCase() || 'straight',
+                  },
+                  distance: step.distanceMeters || 0,
+                  duration: parseDurSec(step.staticDuration || '0s'),
+                  intersections: step.intersections || [{ classes: [] }],
+                }));
+                return {
+                  index: idx,
+                  distance: route.distanceMeters,
+                  duration: durationSec,
+                  geometry: { type: 'LineString' as const, coordinates: coords },
+                  legs: [{
+                    distance: leg?.distanceMeters ?? route.distanceMeters,
+                    duration: parseDurSec(leg?.duration ?? route.duration ?? '0s'),
+                    steps,
+                  }],
+                };
+              });
+
+              const sorted = [...decoded].sort((a, b) => a.duration - b.duration);
+              const fastestDuration = sorted[0].duration;
+
+              const alternatives: RouteAlternative[] = decoded.slice(0, 3).map((route) => ({
+                index: route.index,
+                distance: route.distance,
+                duration: route.duration,
+                geometry: route.geometry,
+                roadType: detectRoadType(route as DirectionsResponse['routes'][0]),
+                isFastest: route.duration === fastestDuration,
+              }));
+
+              console.log(`[fetchRoutes] SUCCESS — ${alternatives.length} route(s), first has ${decoded[0].geometry.coordinates.length} coords`);
+              return alternatives;
+            }
+          }
+
+          // If direct call failed, log and fall through to server fallback
+          console.warn('[fetchRoutes] Direct Routes API call failed, falling back to server route. Status:', res.status, responseText);
+        } catch (directErr) {
+          console.warn('[fetchRoutes] Direct call threw error, falling back to server route:', directErr);
+        }
+      }
+
+      // --- FALLBACK: Server-side /api/directions ---
+      console.log('[fetchRoutes] Using server-side /api/directions fallback');
       const params = new URLSearchParams({
         olng: origin.lng.toString(),
         olat: origin.lat.toString(),
@@ -173,11 +326,11 @@ export default function NavigationMapClient() {
       const res = await fetch(`/api/directions?${params.toString()}`);
       if (!res.ok) {
         const errText = await res.text();
-        throw new Error(`HTTP ${res.status}: ${errText}`);
+        throw new Error(`Server /api/directions HTTP ${res.status}: ${errText}`);
       }
 
       const data: DirectionsResponse = await res.json();
-      if (!data.routes || data.routes.length === 0) throw new Error('No routes returned');
+      if (!data.routes || data.routes.length === 0) throw new Error('No routes returned from server');
 
       return buildRouteAlternatives(data);
     },

@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Backend integration point: Google Routes API (v2)
-// Uses GOOGLE_MAPS_SERVER_KEY (no referrer restrictions) or falls back to NEXT_PUBLIC key
+// Server-side Google Routes API handler.
+// Requires an UNRESTRICTED server API key (no HTTP referrer restrictions).
+// GOOGLE_MAPS_SERVER_API_KEY or GOOGLE_MAPS_SERVER_KEY must be set to an unrestricted key.
+// NEXT_PUBLIC_GOOGLE_MAPS_API_KEY is a browser-restricted key and will be REJECTED by Google
+// when called from a Node.js server (no real browser Referer).
 const GOOGLE_API_KEY =
+  process.env.GOOGLE_MAPS_SERVER_API_KEY ||
   process.env.GOOGLE_MAPS_SERVER_KEY ||
   process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
 
@@ -63,11 +67,20 @@ export async function GET(request: NextRequest) {
   }
 
   if (!GOOGLE_API_KEY) {
+    console.error('[directions] No API key configured. Set GOOGLE_MAPS_SERVER_API_KEY (unrestricted server key).');
     return NextResponse.json(
-      { error: 'Google Maps API key not configured' },
+      { error: 'Google Maps API key not configured. Set GOOGLE_MAPS_SERVER_API_KEY.' },
       { status: 500 }
     );
   }
+
+  const keySource = process.env.GOOGLE_MAPS_SERVER_API_KEY
+    ? 'GOOGLE_MAPS_SERVER_API_KEY'
+    : process.env.GOOGLE_MAPS_SERVER_KEY
+    ? 'GOOGLE_MAPS_SERVER_KEY' :'NEXT_PUBLIC_GOOGLE_MAPS_API_KEY (browser-restricted — may fail)';
+
+  console.log(`[directions] Using key from: ${keySource}`);
+  console.log(`[directions] Route: [${originLng},${originLat}] → [${destLng},${destLat}]`);
 
   try {
     const url = 'https://routes.googleapis.com/directions/v2:computeRoutes';
@@ -96,52 +109,77 @@ export async function GET(request: NextRequest) {
       units: 'METRIC',
     };
 
+    console.log('[directions] Sending to Routes API:', JSON.stringify(requestBody));
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': GOOGLE_API_KEY,
         'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.staticDuration,routes.polyline.encodedPolyline,routes.legs.distanceMeters,routes.legs.duration,routes.legs.steps.distanceMeters,routes.legs.steps.staticDuration,routes.legs.steps.navigationInstruction',
-        // Include Referer so browser-restricted API keys work from server-side
-        'Referer': process.env.NEXT_PUBLIC_SITE_URL || 'https://geonav4154.builtwithrocket.new',
       },
       body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(12000),
     });
 
+    const responseText = await response.text();
+    console.log(`[directions] Routes API HTTP status: ${response.status}`);
+    console.log(`[directions] Routes API response body: ${responseText}`);
+
     if (!response.ok) {
-      const errText = await response.text();
-      console.error('[directions] Routes API error:', response.status, errText);
-      throw new Error(`Routes API error: ${response.status} - ${errText}`);
+      console.error(`[directions] Routes API FAILED — HTTP ${response.status}: ${responseText}`);
+      return NextResponse.json(
+        {
+          error: `Routes API error: HTTP ${response.status}`,
+          googleError: responseText,
+          keySource,
+        },
+        { status: response.status >= 400 && response.status < 500 ? 422 : 502 }
+      );
     }
 
-    const data = await response.json();
+    let data: {
+      routes?: Array<{
+        distanceMeters: number;
+        duration: string;
+        staticDuration?: string;
+        polyline: { encodedPolyline: string };
+        legs: Array<{
+          distanceMeters: number;
+          duration: string;
+          steps: Array<{
+            distanceMeters: number;
+            staticDuration?: string;
+            navigationInstruction?: {
+              instructions: string;
+              maneuver: string;
+            };
+          }>;
+        }>;
+      }>;
+    };
+
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      console.error('[directions] Failed to parse Routes API response as JSON:', responseText);
+      return NextResponse.json(
+        { error: 'Invalid JSON from Routes API', raw: responseText },
+        { status: 502 }
+      );
+    }
 
     if (!data.routes || data.routes.length === 0) {
+      console.warn('[directions] Routes API returned no routes. Body:', responseText);
       return NextResponse.json(
         { error: 'No routes found', status: 'ZERO_RESULTS' },
         { status: 422 }
       );
     }
 
-    const routes = data.routes.map((route: {
-      distanceMeters: number;
-      duration: string;
-      staticDuration?: string;
-      polyline: { encodedPolyline: string };
-      legs: Array<{
-        distanceMeters: number;
-        duration: string;
-        steps: Array<{
-          distanceMeters: number;
-          staticDuration?: string;
-          navigationInstruction?: {
-            instructions: string;
-            maneuver: string;
-          };
-        }>;
-      }>;
-    }) => {
+    console.log(`[directions] Got ${data.routes.length} route(s). First polyline length: ${data.routes[0]?.polyline?.encodedPolyline?.length ?? 0}`);
+
+    const routes = data.routes.map((route) => {
       const totalDistance = route.distanceMeters;
       const totalDuration = parseDurationSeconds(route.duration || route.staticDuration || '0s');
       const overviewCoords = decodePolyline(route.polyline.encodedPolyline);
@@ -188,7 +226,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    console.error('[directions] Error:', message);
+    console.error('[directions] Unexpected error:', message);
     return NextResponse.json(
       { error: 'Directions failed', detail: message },
       { status: 500 }
