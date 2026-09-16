@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Backend integration point: Mapbox Geocoding API
-// Env: MAPBOX_ACCESS_TOKEN (server-side only, never exposed to client)
+// Backend integration point: Google Places Text Search + Geocoding API
+// Env: NEXT_PUBLIC_GOOGLE_MAPS_API_KEY (also readable server-side)
 
-const MAPBOX_TOKEN = process.env.MAPBOX_ACCESS_TOKEN;
+const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -14,52 +14,81 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Query required' }, { status: 400 });
   }
 
-  if (!MAPBOX_TOKEN) {
+  if (!GOOGLE_API_KEY) {
     return NextResponse.json(
-      { error: 'Mapbox token not configured' },
+      { error: 'Google Maps API key not configured' },
       { status: 500 }
     );
   }
 
   try {
-    const encodedQuery = encodeURIComponent(query.trim());
+    const encodedQuery = encodeURIComponent(query.trim() + ' Georgia');
+    const language = lang === 'ka' ? 'ka' : 'en';
 
-    // Language preference: Georgian first, then English fallback
-    const language = lang === 'ka' ? 'ka,en' : 'en,ka';
-
-    // Bias toward Georgia with proximity to Tbilisi center
-    const proximity = '44.8271,41.6938';
-
-    // Country filter includes Georgia (GE) and neighboring countries for cross-border routes
-    const country = 'ge';
-
+    // Use Google Places Text Search API
     const url = [
-      `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodedQuery}.json`,
-      `?access_token=${MAPBOX_TOKEN}`,
+      `https://maps.googleapis.com/maps/api/place/textsearch/json`,
+      `?query=${encodedQuery}`,
+      `&key=${GOOGLE_API_KEY}`,
       `&language=${language}`,
-      `&country=${country}`,
-      `&proximity=${proximity}`,
-      `&types=place,locality,neighborhood,address,poi`,
-      `&limit=8`,
-      `&autoComplete=true`,
+      `&region=ge`,
     ].join('');
 
     const response = await fetch(url, {
-      headers: { 'Accept-Encoding': 'gzip' },
       signal: AbortSignal.timeout(8000),
     });
 
     if (!response.ok) {
-      throw new Error(`Mapbox geocoding error: ${response.status}`);
+      throw new Error(`Google Places error: ${response.status}`);
     }
 
     const data = await response.json();
 
-    return NextResponse.json(data, {
-      headers: {
-        'Cache-Control': 'public, max-age=300, stale-while-revalidate=60',
-      },
+    if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+      throw new Error(`Google Places status: ${data.status}`);
+    }
+
+    // Transform Google Places response to match existing GeocodingFeature shape
+    const features = (data.results || []).slice(0, 8).map((place: {
+      place_id: string;
+      name: string;
+      formatted_address: string;
+      geometry: { location: { lat: number; lng: number } };
+      types?: string[];
+    }) => {
+      const [lng, lat] = [place.geometry.location.lng, place.geometry.location.lat];
+      const placeType = place.types?.[0] || 'place';
+      const category = place.types?.find((t: string) =>
+        ['restaurant', 'fuel', 'lodging', 'airport', 'store', 'hospital'].includes(t)
+      );
+
+      return {
+        id: place.place_id,
+        type: 'Feature',
+        place_name: place.formatted_address,
+        place_name_ka: place.formatted_address,
+        text: place.name,
+        text_ka: place.name,
+        properties: {
+          category: category || placeType,
+          maki: placeType,
+        },
+        geometry: {
+          type: 'Point',
+          coordinates: [lng, lat],
+        },
+        context: [],
+      };
     });
+
+    return NextResponse.json(
+      { features, type: 'FeatureCollection' },
+      {
+        headers: {
+          'Cache-Control': 'public, max-age=300, stale-while-revalidate=60',
+        },
+      }
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error('[geocode] Error:', message);

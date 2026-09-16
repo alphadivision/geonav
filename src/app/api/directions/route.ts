@@ -1,9 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Backend integration point: Mapbox Directions API
-// Env: MAPBOX_ACCESS_TOKEN (server-side only, never exposed to client)
+// Backend integration point: Google Directions API
+// Env: NEXT_PUBLIC_GOOGLE_MAPS_API_KEY (also readable server-side)
 
-const MAPBOX_TOKEN = process.env.MAPBOX_ACCESS_TOKEN;
+const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+
+// Decode Google's encoded polyline format into [lng, lat] coordinate pairs
+function decodePolyline(encoded: string): Array<[number, number]> {
+  const coords: Array<[number, number]> = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+
+  while (index < encoded.length) {
+    let b: number;
+    let shift = 0;
+    let result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlat = result & 1 ? ~(result >> 1) : result >> 1;
+    lat += dlat;
+
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlng = result & 1 ? ~(result >> 1) : result >> 1;
+    lng += dlng;
+
+    coords.push([lng / 1e5, lat / 1e5]);
+  }
+  return coords;
+}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -19,24 +53,24 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  if (!MAPBOX_TOKEN) {
+  if (!GOOGLE_API_KEY) {
     return NextResponse.json(
-      { error: 'Mapbox token not configured' },
+      { error: 'Google Maps API key not configured' },
       { status: 500 }
     );
   }
 
   try {
-    const coordinates = `${originLng},${originLat};${destLng},${destLat}`;
+    const origin = `${originLat},${originLng}`;
+    const destination = `${destLat},${destLng}`;
 
     const url = [
-      `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}`,
-      `?access_token=${MAPBOX_TOKEN}`,
-      `&geometries=geojson`,
-      `&overview=full`,
-      `&steps=true`,
+      `https://maps.googleapis.com/maps/api/directions/json`,
+      `?origin=${origin}`,
+      `&destination=${destination}`,
+      `&mode=driving`,
       `&alternatives=true`,
-      `&annotations=congestion`,
+      `&key=${GOOGLE_API_KEY}`,
       `&language=ka`,
     ].join('');
 
@@ -45,19 +79,80 @@ export async function GET(request: NextRequest) {
     });
 
     if (!response.ok) {
-      throw new Error(`Mapbox directions error: ${response.status}`);
+      throw new Error(`Google Directions error: ${response.status}`);
     }
 
     const data = await response.json();
 
-    if (data.code !== 'Ok') {
+    if (data.status !== 'OK') {
       return NextResponse.json(
-        { error: data.message || 'Route calculation failed' },
+        { error: data.error_message || 'Route calculation failed', status: data.status },
         { status: 422 }
       );
     }
 
-    return NextResponse.json(data, {
+    // Transform Google Directions response to match existing DirectionsResponse shape
+    const routes = (data.routes || []).map((route: {
+      legs: Array<{
+        distance: { value: number };
+        duration: { value: number };
+        steps: Array<{
+          distance: { value: number };
+          duration: { value: number };
+          html_instructions: string;
+          maneuver?: string;
+          polyline: { points: string };
+        }>;
+      }>;
+      overview_polyline: { points: string };
+    }) => {
+      const leg = route.legs[0];
+      const totalDistance = leg.distance.value; // meters
+      const totalDuration = leg.duration.value; // seconds
+      const overviewCoords = decodePolyline(route.overview_polyline.points);
+
+      const steps = leg.steps.map((step) => ({
+        maneuver: {
+          instruction: step.html_instructions.replace(/<[^>]+>/g, ''),
+          type: step.maneuver || 'straight',
+        },
+        distance: step.distance.value,
+        duration: step.duration.value,
+        intersections: [
+          {
+            // Map Google step maneuver to road class approximation
+            classes: step.maneuver?.includes('highway') ? ['motorway'] : [],
+          },
+        ],
+      }));
+
+      return {
+        distance: totalDistance,
+        duration: totalDuration,
+        geometry: {
+          type: 'LineString',
+          coordinates: overviewCoords,
+        },
+        legs: [
+          {
+            distance: totalDistance,
+            duration: totalDuration,
+            steps,
+          },
+        ],
+      };
+    });
+
+    const transformed = {
+      routes,
+      waypoints: [
+        { name: 'origin', location: [parseFloat(originLng), parseFloat(originLat)] as [number, number] },
+        { name: 'destination', location: [parseFloat(destLng), parseFloat(destLat)] as [number, number] },
+      ],
+      code: 'Ok',
+    };
+
+    return NextResponse.json(transformed, {
       headers: {
         'Cache-Control': 'public, max-age=120',
       },
