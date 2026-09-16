@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Backend integration point: Google Routes API (v2)
-// Env: NEXT_PUBLIC_GOOGLE_MAPS_API_KEY (also readable server-side)
-
-const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+// Uses GOOGLE_MAPS_SERVER_KEY (no referrer restrictions) or falls back to NEXT_PUBLIC key
+const GOOGLE_API_KEY =
+  process.env.GOOGLE_MAPS_SERVER_KEY ||
+  process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 // Decode Google's encoded polyline format into [lng, lat] coordinate pairs
 function decodePolyline(encoded: string): Array<[number, number]> {
@@ -69,7 +70,6 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Use Google Routes API (v2) instead of legacy Directions API
     const url = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 
     const requestBody = {
@@ -109,6 +109,7 @@ export async function GET(request: NextRequest) {
 
     if (!response.ok) {
       const errText = await response.text();
+      console.error('[directions] Routes API error:', response.status, errText);
       throw new Error(`Routes API error: ${response.status} - ${errText}`);
     }
 
@@ -121,7 +122,6 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Transform Routes API response to match existing DirectionsResponse shape
     const routes = data.routes.map((route: {
       distanceMeters: number;
       duration: string;
@@ -152,11 +152,7 @@ export async function GET(request: NextRequest) {
         },
         distance: step.distanceMeters || 0,
         duration: parseDurationSeconds(step.staticDuration || '0s'),
-        intersections: [
-          {
-            classes: [],
-          },
-        ],
+        intersections: [{ classes: [] }],
       }));
 
       return {
@@ -186,9 +182,7 @@ export async function GET(request: NextRequest) {
     };
 
     return NextResponse.json(transformed, {
-      headers: {
-        'Cache-Control': 'public, max-age=120',
-      },
+      headers: { 'Cache-Control': 'public, max-age=120' },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
