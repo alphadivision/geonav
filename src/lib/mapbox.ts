@@ -1,25 +1,13 @@
-// Mapbox utility helpers — map initialization and layer management
+// Map utility helpers — coordinate math and constants
 
-import type { Feature, LineString, Point } from 'geojson';
 import type { MapStyle } from '@/types';
 
+// Georgia center [lng, lat]
 export const GEORGIA_CENTER: [number, number] = [43.3569, 42.3154];
 export const GEORGIA_BOUNDS: [[number, number], [number, number]] = [
   [39.9760, 41.0542],
   [46.7370, 43.5864],
 ];
-
-export const MAP_STYLE_DARK = 'mapbox://styles/mapbox/navigation-night-v1';
-export const MAP_STYLE_STANDARD = 'mapbox://styles/mapbox/navigation-day-v1';
-export const MAP_STYLE_SATELLITE = 'mapbox://styles/mapbox/satellite-streets-v12';
-export const MAP_STYLE_STREETS = 'mapbox://styles/mapbox/streets-v12';
-
-export const MAP_STYLES: Record<MapStyle, string> = {
-  dark: MAP_STYLE_DARK,
-  standard: MAP_STYLE_STANDARD,
-  satellite: MAP_STYLE_SATELLITE,
-  streets: MAP_STYLE_STREETS,
-};
 
 export const DEFAULT_MAP_STYLE: MapStyle = 'dark';
 
@@ -28,29 +16,6 @@ export const ROUTE_LAYER_ID = 'geonav-route-line';
 export const ROUTE_CASING_LAYER_ID = 'geonav-route-casing';
 export const DESTINATION_SOURCE_ID = 'geonav-destination';
 export const USER_SOURCE_ID = 'geonav-user-location';
-
-export function buildRouteGeoJSON(
-  geometry: LineString
-): Feature<LineString> {
-  return {
-    type: 'Feature',
-    properties: {},
-    geometry,
-  };
-}
-
-export function buildPointGeoJSON(
-  coordinates: [number, number]
-): Feature<Point> {
-  return {
-    type: 'Feature',
-    properties: {},
-    geometry: {
-      type: 'Point',
-      coordinates,
-    },
-  };
-}
 
 /**
  * Calculate bearing (degrees 0-360) between two GPS coordinates.
@@ -99,7 +64,6 @@ export function haversineDistance(
  * alpha: 0 = no change, 1 = instant change
  */
 export function smoothHeading(prev: number, next: number, alpha: number): number {
-  // Handle wrap-around (e.g. 350 -> 10 should go through 360/0, not 180)
   let diff = next - prev;
   if (diff > 180) diff -= 360;
   if (diff < -180) diff += 360;
