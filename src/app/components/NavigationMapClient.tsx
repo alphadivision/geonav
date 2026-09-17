@@ -29,6 +29,10 @@ import MapStyleSwitcher, { getStoredMapStyle, setStoredMapStyle } from './MapSty
 import RouteAlternativesPanel from './RouteAlternativesPanel';
 import PinDestinationCard from './PinDestinationCard';
 import RecenterButton from './RecenterButton';
+import TrafficButton from './TrafficButton';
+import SupportBanner from './SupportBanner';
+import HelpButton from './HelpButton';
+import BrandBadge from './BrandBadge';
 import type { MapCanvasHandle } from './MapCanvas';
 
 declare const google: typeof import('@types/google.maps') extends never
@@ -668,6 +672,11 @@ export default function NavigationMapClient() {
   const showRouteAlternatives =
     appState === 'routeActive' && routeAlternatives.length > 0 && selectedDestination;
 
+  // Bottom sheets (destination/route/pin cards) are anchored bottom-left and
+  // would overlap the brand/settings/help cluster, so hide it while one is open.
+  const hideBottomLeftChrome =
+    showBottomPanel || showRouteAlternatives || !!pinDestination || !!showReplacePrompt;
+
   return (
     <div className="fixed inset-0 overflow-hidden bg-background no-select">
       {/* Full-screen map canvas */}
@@ -688,9 +697,12 @@ export default function NavigationMapClient() {
         />
       </div>
 
-      {/* Top overlay: search bar + language switcher */}
+      {/* Top overlay: support banner + search bar + language switcher + compass */}
       <div className="fixed top-0 left-0 right-0 z-panel pointer-events-none">
         <div className="flex items-start gap-3 p-3 sm:p-4 pointer-events-auto" data-no-map-tap>
+          <div className="flex-shrink-0 mt-0.5 hidden sm:block">
+            <SupportBanner t={t} />
+          </div>
           <div className="flex-1 min-w-0">
             <SearchBar
               language={language}
@@ -705,31 +717,51 @@ export default function NavigationMapClient() {
               onChange={handleLanguageChange}
             />
           </div>
+          <div className="flex-shrink-0 mt-0.5">
+            <RecenterButton
+              onRecenter={handleRecenter}
+              t={t}
+              followMode={followMode}
+            />
+          </div>
+        </div>
+        {/* Support banner on small screens: own row below search so it doesn't crowd it */}
+        <div className="px-3 pb-2 pointer-events-auto sm:hidden" data-no-map-tap>
+          <SupportBanner t={t} />
         </div>
       </div>
 
-      {/* Right side controls: zoom + recenter + map style + locate */}
+      {/* Bottom-left: brand badge + map style + help (hidden while a bottom sheet is open) */}
+      {!hideBottomLeftChrome && (
+        <div
+          className="fixed left-3 sm:left-4 bottom-4 z-panel flex items-center gap-2"
+          data-no-map-tap
+        >
+          <BrandBadge />
+          <MapStyleSwitcher
+            currentStyle={mapStyle}
+            onStyleChange={handleMapStyleChange}
+            t={t}
+          />
+          <HelpButton t={t} />
+        </div>
+      )}
+
+      {/* Bottom-right: traffic + zoom + locate */}
       <div
-        className="fixed right-3 sm:right-5 bottom-4 z-panel flex flex-col gap-2"
+        className="fixed right-3 sm:right-4 bottom-4 z-panel flex items-center gap-2"
         data-no-map-tap
       >
+        <TrafficButton
+          trafficEnabled={trafficEnabled}
+          onToggle={handleTrafficToggle}
+          t={t}
+        />
         <ZoomControls
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}
           t={t}
         />
-        <div className="h-2" />
-        <RecenterButton
-          onRecenter={handleRecenter}
-          t={t}
-          followMode={followMode}
-        />
-        <MapStyleSwitcher
-          currentStyle={mapStyle}
-          onStyleChange={handleMapStyleChange}
-          t={t}
-        />
-        <div className="h-1" />
         <LocationButton
           onLocate={handleLocateMe}
           t={t}

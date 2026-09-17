@@ -12,25 +12,33 @@ interface ZoomControlsProps {
 
 export default function ZoomControls({ onZoomIn, onZoomOut, t }: ZoomControlsProps) {
   return (
-    <div className="glass-dark rounded-2xl overflow-hidden shadow-xl shadow-black/40 flex flex-col">
-      <button
-        onClick={onZoomIn}
-        className="touch-target-lg text-foreground hover:text-primary hover:bg-muted/60 transition-colors duration-150 active:scale-95 active:bg-muted"
-        aria-label={t.zoomIn}
-        title={t.zoomIn}
-      >
-        <Plus size={24} strokeWidth={2.5} />
-      </button>
-
-      <div className="h-px bg-border/60 mx-3" />
-
+    <div className="flex items-center gap-2">
       <button
         onClick={onZoomOut}
-        className="touch-target-lg text-foreground hover:text-primary hover:bg-muted/60 transition-colors duration-150 active:scale-95 active:bg-muted"
+        className={[
+          'glass-dark rounded-full w-11 h-11 flex items-center justify-center',
+          'text-foreground hover:text-primary hover:bg-muted/60',
+          'shadow-xl shadow-black/40',
+          'transition-all duration-150 active:scale-95 active:bg-muted',
+        ].join(' ')}
         aria-label={t.zoomOut}
         title={t.zoomOut}
       >
-        <Minus size={24} strokeWidth={2.5} />
+        <Minus size={20} strokeWidth={2.5} />
+      </button>
+
+      <button
+        onClick={onZoomIn}
+        className={[
+          'glass-dark rounded-full w-11 h-11 flex items-center justify-center',
+          'text-foreground hover:text-primary hover:bg-muted/60',
+          'shadow-xl shadow-black/40',
+          'transition-all duration-150 active:scale-95 active:bg-muted',
+        ].join(' ')}
+        aria-label={t.zoomIn}
+        title={t.zoomIn}
+      >
+        <Plus size={20} strokeWidth={2.5} />
       </button>
     </div>
   );

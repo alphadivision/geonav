@@ -14,12 +14,12 @@ export default function RecenterButton({ onRecenter, t, followMode }: RecenterBu
     <button
       onClick={onRecenter}
       className={[
-        'glass-dark rounded-2xl',
+        'glass-dark rounded-full',
         'transition-all duration-150',
         'active:scale-95',
         'shadow-xl shadow-black/40',
         'flex items-center justify-center',
-        'w-[52px] h-[52px]',
+        'w-11 h-11',
         followMode
           ? 'text-primary bg-primary/20 border border-primary/40' :'text-foreground hover:text-primary hover:bg-muted/60 active:bg-muted border border-white/10',
       ].join(' ')}
@@ -28,8 +28,8 @@ export default function RecenterButton({ onRecenter, t, followMode }: RecenterBu
     >
       {/* Compass / recenter icon — filled ring with arrow when follow active */}
       <svg
-        width="22"
-        height="22"
+        width="20"
+        height="20"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"

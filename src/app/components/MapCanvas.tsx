@@ -39,34 +39,37 @@ const GOOGLE_MAP_TYPE: Record<MapStyle, string> = {
   streets: 'roadmap',
 };
 
-// Dark mode styles for Google Maps
+// Dark mode styles for Google Maps — near-black, monochrome, minimal (matches TeslaNav brand style)
 const DARK_STYLES: Array<{ elementType?: string; featureType?: string; stylers: Array<Record<string, string>>; }> = [
-  { elementType: 'geometry', stylers: [{ color: '#1d2c4d' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#8ec3b9' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#1a3646' }] },
-  { featureType: 'administrative.country', elementType: 'geometry.stroke', stylers: [{ color: '#4b6878' }] },
-  { featureType: 'administrative.land_parcel', elementType: 'labels.text.fill', stylers: [{ color: '#64779e' }] },
-  { featureType: 'administrative.province', elementType: 'geometry.stroke', stylers: [{ color: '#4b6878' }] },
-  { featureType: 'landscape.man_made', elementType: 'geometry.stroke', stylers: [{ color: '#334e87' }] },
-  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#023e58' }] },
-  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#283d6a' }] },
-  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#6f9ba5' }] },
-  { featureType: 'poi', elementType: 'labels.text.stroke', stylers: [{ color: '#1d2c4d' }] },
-  { featureType: 'poi.park', elementType: 'geometry.fill', stylers: [{ color: '#023e58' }] },
-  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#3C7680' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#304a7d' }] },
-  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#98a5be' }] },
-  { featureType: 'road', elementType: 'labels.text.stroke', stylers: [{ color: '#1d2c4d' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#2c6675' }] },
-  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#255763' }] },
-  { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#b0d5ce' }] },
-  { featureType: 'road.highway', elementType: 'labels.text.stroke', stylers: [{ color: '#023747' }] },
-  { featureType: 'transit', elementType: 'labels.text.fill', stylers: [{ color: '#98a5be' }] },
-  { featureType: 'transit', elementType: 'labels.text.stroke', stylers: [{ color: '#1d2c4d' }] },
-  { featureType: 'transit.line', elementType: 'geometry.fill', stylers: [{ color: '#283d6a' }] },
-  { featureType: 'transit.station', elementType: 'geometry', stylers: [{ color: '#3a4762' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0e1626' }] },
-  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#4e6d70' }] },
+  { elementType: 'geometry', stylers: [{ color: '#0a0a0a' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#6b6b6b' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0a' }] },
+  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#2a2a2a' }] },
+  { featureType: 'administrative.land_parcel', elementType: 'labels.text.fill', stylers: [{ color: '#3a3a3a' }] },
+  { featureType: 'administrative.province', elementType: 'geometry.stroke', stylers: [{ color: '#2a2a2a' }] },
+  { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#0a0a0a' }] },
+  { featureType: 'landscape.man_made', elementType: 'geometry.stroke', stylers: [{ color: '#232323' }] },
+  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#0c0c0c' }] },
+  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#141414' }] },
+  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#4a4a4a' }] },
+  { featureType: 'poi', elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0a' }] },
+  { featureType: 'poi.park', elementType: 'geometry.fill', stylers: [{ color: '#101410' }] },
+  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#3a4a3a' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#2a2a2a' }] },
+  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#6b6b6b' }] },
+  { featureType: 'road', elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0a' }] },
+  { featureType: 'road.arterial', elementType: 'geometry', stylers: [{ color: '#242424' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#383838' }] },
+  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#2a2a2a' }] },
+  { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#8c8c8c' }] },
+  { featureType: 'road.highway', elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0a' }] },
+  { featureType: 'road.local', elementType: 'geometry', stylers: [{ color: '#202020' }] },
+  { featureType: 'transit', elementType: 'labels.text.fill', stylers: [{ color: '#5a5a5a' }] },
+  { featureType: 'transit', elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0a' }] },
+  { featureType: 'transit.line', elementType: 'geometry.fill', stylers: [{ color: '#1c1c1c' }] },
+  { featureType: 'transit.station', elementType: 'geometry', stylers: [{ color: '#1c1c1c' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#050505' }] },
+  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#3a3a3a' }] },
 ];
 
 const STANDARD_STYLES: Array<{ elementType?: string; featureType?: string; stylers: Array<Record<string, string>>; }> = [];
@@ -85,9 +88,9 @@ const MAP_STYLES_CONFIG: Record<MapStyle, Array<{ elementType?: string; featureT
 
 const ARROW_SVG = `
 <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
-  <circle cx="20" cy="20" r="18" fill="#1a73e8" fill-opacity="0.18" stroke="#1a73e8" stroke-width="1.5" stroke-opacity="0.5"/>
-  <polygon points="20,4 28,30 20,24 12,30" fill="#1a73e8" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/>
-  <circle cx="20" cy="24" r="4" fill="#ffffff" stroke="#1a73e8" stroke-width="2"/>
+  <circle cx="20" cy="20" r="18" fill="#1a73e8" fill-opacity="0.22" stroke="#1a73e8" stroke-width="1.5" stroke-opacity="0.5"/>
+  <polygon points="20,4 28,30 20,24 12,30" fill="#e53935" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="20" cy="24" r="4" fill="#ffffff" stroke="#e53935" stroke-width="2"/>
 </svg>
 `;
 
