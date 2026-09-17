@@ -80,7 +80,7 @@ export interface Translations {
 
 export const translations: Record<Language, Translations> = {
   ka: {
-    appName: 'GeoNav',
+    appName: 'TSL MAP',
     searchPlaceholder: 'სად გსურთ წასვლა?',
     route: 'მარშრუტი',
     showRoute: 'მარშრუტის ჩვენება',
@@ -151,7 +151,7 @@ export const translations: Record<Language, Translations> = {
     exitNavigation: 'ნავიგაციის დასრულება',
   },
   en: {
-    appName: 'GeoNav',
+    appName: 'TSL MAP',
     searchPlaceholder: 'Where do you want to go?',
     route: 'Route',
     showRoute: 'Show Route',

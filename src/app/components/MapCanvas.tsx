@@ -146,7 +146,6 @@ const MAP_STYLES_CONFIG: Record<MapStyle, Array<{ elementType?: string; featureT
 // bearing with no offset needed).
 const ARROW_ASSET_URL = '/markers/arrow.png';
 const ARROW_DISPLAY_SIZE = 40; // on-screen size in px
-const ARROW_HALO_SIZE = 54; // circular puck behind the arrow
 
 // Destination pin asset (provided PNG). Anchor is the bottom tip of the
 // teardrop shape so it points exactly at the destination coordinate.
@@ -182,13 +181,9 @@ function createArrowOverlayClass() {
     onAdd() {
       const container = document.createElement('div');
       container.style.position = 'absolute';
-      container.style.width = `${ARROW_HALO_SIZE}px`;
-      container.style.height = `${ARROW_HALO_SIZE}px`;
+      container.style.width = `${ARROW_DISPLAY_SIZE}px`;
+      container.style.height = `${ARROW_DISPLAY_SIZE}px`;
       container.style.pointerEvents = 'none';
-      container.style.borderRadius = '50%';
-      container.style.background = 'rgba(18,26,46,0.92)';
-      container.style.border = '1.5px solid #1a2744';
-      container.style.boxShadow = '0 0 0 1.5px rgba(26,115,232,0.35)';
       container.style.display = 'flex';
       container.style.alignItems = 'center';
       container.style.justifyContent = 'center';
@@ -217,8 +212,8 @@ function createArrowOverlayClass() {
       if (!projection) return;
       const point = projection.fromLatLngToDivPixel(new google.maps.LatLng(this.position));
       if (!point) return;
-      this.container.style.left = `${point.x - ARROW_HALO_SIZE / 2}px`;
-      this.container.style.top = `${point.y - ARROW_HALO_SIZE / 2}px`;
+      this.container.style.left = `${point.x - ARROW_DISPLAY_SIZE / 2}px`;
+      this.container.style.top = `${point.y - ARROW_DISPLAY_SIZE / 2}px`;
     }
 
     onRemove() {
@@ -427,7 +422,6 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const pinMarkerRef = useRef<google.maps.Marker | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
     const userArrowMarkerRef = useRef<ArrowOverlayInstance | null>(null);
     const ArrowOverlayClassRef = useRef<ReturnType<typeof createArrowOverlayClass> | null>(null);
-    const accuracyCircleRef = useRef<google.maps.Circle | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
     const trafficLayerRef = useRef<google.maps.TrafficLayer | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
 
     // Route polylines
@@ -558,7 +552,6 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         cameraHeadingRef.current = cameraHeadingRef.current + angleDiff(cameraHeadingRef.current, targetHeadingRef.current) * CAMERA_BEARING_ALPHA;
 
         updateArrowMarker(nextPosition, currentHeadingRef.current);
-        accuracyCircleRef.current?.setCenter({ lat: nextPosition[1], lng: nextPosition[0] });
 
         if (followModeRef.current) {
           const navMode = navigationModeRef.current;
@@ -862,24 +855,6 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
             if (!map || !isMapReadyRef.current) return;
 
-            // Accuracy circle — center is kept in sync every frame by animateFrame
-            const position = { lat: rawCoords[1], lng: rawCoords[0] };
-            if (!accuracyCircleRef.current) {
-              accuracyCircleRef.current = new google.maps.Circle({
-                map,
-                center: position,
-                radius: Math.max(location.accuracy, 20),
-                fillColor: '#1a73e8',
-                fillOpacity: 0.12,
-                strokeColor: '#1a73e8',
-                strokeOpacity: 0.35,
-                strokeWeight: 1,
-                zIndex: 7,
-              });
-            } else {
-              accuracyCircleRef.current.setRadius(Math.max(location.accuracy, 20));
-            }
-
             // Off-route detection
             if (activeRouteGeometryRef.current && activeRouteGeometryRef.current.length > 0) {
               const now = Date.now();
@@ -897,7 +872,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
             if (!hasInitialLocationRef.current) {
               hasInitialLocationRef.current = true;
               if (!followModeRef.current) {
-                map.panTo(position);
+                map.panTo({ lat: rawCoords[1], lng: rawCoords[0] });
                 map.setZoom(14);
               }
             }
@@ -926,7 +901,6 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         destinationMarkerRef.current?.setMap(null);
         pinMarkerRef.current?.setMap(null);
         userArrowMarkerRef.current?.setMap(null);
-        accuracyCircleRef.current?.setMap(null);
         trafficLayerRef.current?.setMap(null);
         mainRoutePolylineRef.current?.setMap(null);
         mainRouteCasingRef.current?.setMap(null);

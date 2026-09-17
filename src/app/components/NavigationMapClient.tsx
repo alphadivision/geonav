@@ -31,7 +31,6 @@ import PinDestinationCard from './PinDestinationCard';
 import RecenterButton from './RecenterButton';
 import MapControlsPanel from './MapControlsPanel';
 import NavigationHUD from './NavigationHUD';
-import BrandBadge from './BrandBadge';
 import type { MapCanvasHandle } from './MapCanvas';
 
 declare const google: typeof import('@types/google.maps') extends never
@@ -795,13 +794,12 @@ export default function NavigationMapClient() {
         </div>
       </div>
 
-      {/* Bottom-left: brand badge + collapsible Map Controls (hidden while a bottom sheet is open) */}
+      {/* Bottom-left: collapsible Map Controls (hidden while a bottom sheet is open) */}
       {!hideBottomLeftChrome && (
         <div
           className="fixed left-3 sm:left-4 bottom-4 z-panel flex items-center gap-2"
           data-no-map-tap
         >
-          <BrandBadge />
           <MapControlsPanel
             language={language}
             onLanguageChange={handleLanguageChange}
