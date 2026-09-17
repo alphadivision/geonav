@@ -50,11 +50,8 @@ const DARK_STYLES: Array<{ elementType?: string; featureType?: string; stylers: 
   { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#0a0a0a' }] },
   { featureType: 'landscape.man_made', elementType: 'geometry.stroke', stylers: [{ color: '#232323' }] },
   { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#0c0c0c' }] },
-  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#141414' }] },
-  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#4a4a4a' }] },
-  { featureType: 'poi', elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0a' }] },
-  { featureType: 'poi.park', elementType: 'geometry.fill', stylers: [{ color: '#101410' }] },
-  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#3a4a3a' }] },
+  // Hide POI icons/labels entirely — keeps the map clean and uncluttered
+  { featureType: 'poi', stylers: [{ visibility: 'off' }] },
   { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#2a2a2a' }] },
   { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#6b6b6b' }] },
   { featureType: 'road', elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0a' }] },
@@ -64,10 +61,8 @@ const DARK_STYLES: Array<{ elementType?: string; featureType?: string; stylers: 
   { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#8c8c8c' }] },
   { featureType: 'road.highway', elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0a' }] },
   { featureType: 'road.local', elementType: 'geometry', stylers: [{ color: '#202020' }] },
-  { featureType: 'transit', elementType: 'labels.text.fill', stylers: [{ color: '#5a5a5a' }] },
-  { featureType: 'transit', elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0a' }] },
-  { featureType: 'transit.line', elementType: 'geometry.fill', stylers: [{ color: '#1c1c1c' }] },
-  { featureType: 'transit.station', elementType: 'geometry', stylers: [{ color: '#1c1c1c' }] },
+  // Hide transit lines/station icons — not useful for driving navigation and adds clutter
+  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
   { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#050505' }] },
   { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#3a3a3a' }] },
 ];

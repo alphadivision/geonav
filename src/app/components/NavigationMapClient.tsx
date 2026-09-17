@@ -18,19 +18,17 @@ import type {
   DirectionsResponse,
 } from '@/types';
 import SearchBar from './SearchBar';
-import LanguageSwitcher from './LanguageSwitcher';
 import ZoomControls from './ZoomControls';
 import LocationButton from './LocationButton';
 import DestinationCard from './DestinationCard';
 import ErrorToast from './ErrorToast';
 import LoadingOverlay from './LoadingOverlay';
-import MapStyleSwitcher, { getStoredMapStyle, setStoredMapStyle } from './MapStyleSwitcher';
+import { getStoredMapStyle, setStoredMapStyle } from './MapStyleSwitcher';
 
 import RouteAlternativesPanel from './RouteAlternativesPanel';
 import PinDestinationCard from './PinDestinationCard';
 import RecenterButton from './RecenterButton';
-import TrafficButton from './TrafficButton';
-import HelpButton from './HelpButton';
+import MapControlsPanel from './MapControlsPanel';
 import BrandBadge from './BrandBadge';
 import type { MapCanvasHandle } from './MapCanvas';
 
@@ -336,27 +334,6 @@ export default function NavigationMapClient() {
       if (!data.routes || data.routes.length === 0) throw new Error('No routes returned from server');
 
       return buildRouteAlternatives(data);
-    },
-    []
-  );
-
-  const handleDestinationSelect = useCallback(
-    (result: SearchResult) => {
-      setSelectedDestination(result);
-      setRouteInfo(null);
-      setRouteAlternatives([]);
-      setSelectedRouteIndex(0);
-      setAppState('destinationSelected');
-      setPinDestination(null);
-      setShowReplacePrompt(null);
-      // Do NOT disable follow mode here — it will auto-enable when route is active
-      if (mapRef.current) {
-        mapRef.current.flyTo(result.coordinates, 15);
-        mapRef.current.setDestinationMarker(result.coordinates);
-        mapRef.current.setPinMarker(null);
-        mapRef.current.setRoute(null);
-        mapRef.current.setAlternativeRoutes([], 0);
-      }
     },
     []
   );
@@ -755,10 +732,10 @@ export default function NavigationMapClient() {
         />
       </div>
 
-      {/* Top overlay: corner destination search (replaces the old Support badge) + main search bar + language switcher + compass */}
+      {/* Top overlay: corner destination search (replaces the old Support badge) + compass. Kept minimal — no large search bar. */}
       <div className="fixed top-0 left-0 right-0 z-panel pointer-events-none">
-        <div className="flex items-start gap-3 p-3 sm:p-4 pointer-events-auto" data-no-map-tap>
-          <div className="flex-shrink-0 mt-0.5">
+        <div className="flex items-start justify-between gap-3 p-3 sm:p-4 pointer-events-auto" data-no-map-tap>
+          <div className="flex-shrink-0">
             <SearchBar
               language={language}
               t={t}
@@ -767,21 +744,7 @@ export default function NavigationMapClient() {
               compact
             />
           </div>
-          <div className="flex-1 min-w-0">
-            <SearchBar
-              language={language}
-              t={t}
-              onSelectResult={handleDestinationSelect}
-              disabled={!isMapReady}
-            />
-          </div>
-          <div className="flex-shrink-0 mt-0.5">
-            <LanguageSwitcher
-              language={language}
-              onChange={handleLanguageChange}
-            />
-          </div>
-          <div className="flex-shrink-0 mt-0.5">
+          <div className="flex-shrink-0">
             <RecenterButton
               onRecenter={handleRecenter}
               t={t}
@@ -791,32 +754,30 @@ export default function NavigationMapClient() {
         </div>
       </div>
 
-      {/* Bottom-left: brand badge + map style + help (hidden while a bottom sheet is open) */}
+      {/* Bottom-left: brand badge + collapsible Map Controls (hidden while a bottom sheet is open) */}
       {!hideBottomLeftChrome && (
         <div
           className="fixed left-3 sm:left-4 bottom-4 z-panel flex items-center gap-2"
           data-no-map-tap
         >
           <BrandBadge />
-          <MapStyleSwitcher
+          <MapControlsPanel
+            language={language}
+            onLanguageChange={handleLanguageChange}
             currentStyle={mapStyle}
             onStyleChange={handleMapStyleChange}
+            trafficEnabled={trafficEnabled}
+            onTrafficToggle={handleTrafficToggle}
             t={t}
           />
-          <HelpButton t={t} />
         </div>
       )}
 
-      {/* Bottom-right: traffic + zoom + locate */}
+      {/* Bottom-right: zoom + locate (primary, always-visible controls) */}
       <div
         className="fixed right-3 sm:right-4 bottom-4 z-panel flex items-center gap-2"
         data-no-map-tap
       >
-        <TrafficButton
-          trafficEnabled={trafficEnabled}
-          onToggle={handleTrafficToggle}
-          t={t}
-        />
         <ZoomControls
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}
