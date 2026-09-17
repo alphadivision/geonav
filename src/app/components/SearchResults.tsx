@@ -6,7 +6,6 @@ import type { SearchResult } from '@/types';
 import type { Language } from '@/lib/i18n';
 import type { Translations } from '@/lib/i18n';
 import type { LucideIcon } from 'lucide-react';
-import Icon from '@/components/ui/AppIcon';
 
 
 interface SearchResultsProps {

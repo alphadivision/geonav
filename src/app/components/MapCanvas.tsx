@@ -465,20 +465,22 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         return;
       }
 
+      // Only request what's needed for the map to become visible/interactive.
+      // 'geometry' is unused anywhere in this app — it was pure dead weight on
+      // every load. 'places' (used only by SearchBar's autocomplete, which
+      // already has a working non-Places server-side fallback) is loaded
+      // AFTER the map is constructed (see below), as its own separate,
+      // non-blocking request — calling it in parallel with 'maps' would still
+      // bundle both into the same initial fetch, so it has to come later.
       setOptions({
         key: apiKey,
         version: 'weekly',
-        libraries: ['places', 'geometry'],
       });
 
       let map: google.maps.Map;
       let cleanedUp = false;
 
-      Promise.all([
-        importLibrary('maps'),
-        importLibrary('places'),
-        importLibrary('geometry'),
-      ]).then(([mapsLib]) => {
+      importLibrary('maps').then((mapsLib) => {
         if (cleanedUp || !containerRef.current) return;
 
         const { Map } = mapsLib as google.maps.MapsLibrary;
@@ -608,6 +610,16 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
         isMapReadyRef.current = true;
         onMapReady();
+
+        // Load 'places' now that the map itself is already up and interactive
+        // — this is a separate, non-blocking request (fired after 'maps' has
+        // already resolved, not alongside it) so it never delays first paint.
+        // SearchBar also has a working non-Places /api/geocode fallback, so
+        // search still functions even in the brief window before this
+        // resolves.
+        importLibrary('places').catch(() => {
+          console.warn('[TSLMAP] Places library failed to load — search will use the server-side geocode fallback.');
+        });
 
         // Watch user location. This only records the latest raw fix and derived
         // heading as interpolation *targets* — the actual marker/camera drawing

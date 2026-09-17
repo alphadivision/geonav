@@ -1,14 +1,27 @@
 'use client';
 
 import React from 'react';
-import * as HeroIcons from '@heroicons/react/24/outline';
-import * as HeroIconsSolid from '@heroicons/react/24/solid';
-import { QuestionMarkCircleIcon } from '@heroicons/react/24/outline';
+import {
+  ArrowLeftIcon,
+  HomeIcon,
+  QuestionMarkCircleIcon,
+} from '@heroicons/react/24/outline';
 
 type IconVariant = 'outline' | 'solid';
 
+// Explicit named imports (only the icons this app actually renders) instead
+// of `import * as HeroIcons` + a dynamic string lookup — the wildcard import
+// pulled in the entire icon set (~74KB gzip) into every route that imports
+// this file, including the map, since a dynamic `iconSet[name]` lookup
+// defeats tree-shaking. Add new icons here explicitly as they're needed.
+const OUTLINE_ICONS = {
+  ArrowLeftIcon,
+  HomeIcon,
+  QuestionMarkCircleIcon,
+};
+
 interface IconProps {
-    name: string; // Changed to string to accept dynamic values
+    name: string;
     variant?: IconVariant;
     size?: number;
     className?: string;
@@ -26,8 +39,8 @@ function Icon({
     disabled = false,
     ...props
 }: IconProps) {
-    const iconSet = variant === 'solid' ? HeroIconsSolid : HeroIcons;
-    const IconComponent = iconSet[name as keyof typeof iconSet] as React.ComponentType<any>;
+    void variant; // only the outline set is used anywhere in this app today
+    const IconComponent = OUTLINE_ICONS[name as keyof typeof OUTLINE_ICONS] as React.ComponentType<any>;
 
     if (!IconComponent) {
         return (
@@ -52,4 +65,4 @@ function Icon({
     );
 }
 
-export default Icon; 
+export default Icon;
