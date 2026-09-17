@@ -469,6 +469,22 @@ interface MapCanvasProps {
    * screen-fixed arrow — only visually rotates on a vector map, see
    * USE_VECTOR_MAP). Defaults to 'headingUp' to preserve prior behavior. */
   mapViewMode?: 'northUp' | 'headingUp';
+  /** Fires only when the map's current camera-heading crosses into a new
+   * 45°-wide compass bucket (N/NE/E/SE/S/SW/W/NW) — not on every fractional
+   * degree of the per-frame easing — so the compass button can display the
+   * live geographic direction in Heading-Up mode without triggering a
+   * React re-render on every animation frame. */
+  onHeadingChange?: (cardinal: CompassLabel) => void;
+}
+
+export type CompassLabel = 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW';
+
+const COMPASS_LABELS: readonly CompassLabel[] = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+
+function headingToCardinal(heading: number): CompassLabel {
+  const normalized = ((heading % 360) + 360) % 360;
+  const index = Math.round(normalized / 45) % COMPASS_LABELS.length;
+  return COMPASS_LABELS[index];
 }
 
 export interface MapCanvasHandle {
@@ -526,6 +542,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       onOffRoute,
       navigationMode = false,
       mapViewMode = 'headingUp',
+      onHeadingChange,
     },
     ref
   ) => {
@@ -568,6 +585,8 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const trafficEnabledRef = useRef(trafficEnabled);
     const onMapTapRef = useRef(onMapTap);
     const onOffRouteRef = useRef(onOffRoute);
+    const onHeadingChangeRef = useRef(onHeadingChange);
+    const lastReportedCardinalRef = useRef<CompassLabel | null>(null);
     const activeRouteGeometryRef = useRef<Array<[number, number]> | null>(null);
     const activeRouteSegmentsRef = useRef<TrafficSegment[] | null>(null);
     const lastOffRouteCheckRef = useRef<number>(0);
@@ -586,6 +605,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     trafficEnabledRef.current = trafficEnabled;
     onMapTapRef.current = onMapTap;
     onOffRouteRef.current = onOffRoute;
+    onHeadingChangeRef.current = onHeadingChange;
 
     const applyTrafficVisibility = useCallback((enabled: boolean) => {
       let map = mapRef.current;
@@ -696,6 +716,21 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         // or a near-full-circle spin.
         const cameraHeadingTarget = mapViewModeRef.current === 'northUp' ? 0 : targetHeadingRef.current;
         cameraHeadingRef.current = cameraHeadingRef.current + angleDiff(cameraHeadingRef.current, cameraHeadingTarget) * CAMERA_BEARING_ALPHA;
+
+        // Compass label: reflects whatever direction is currently at the top
+        // of the screen (the camera's actual heading), bucketed into 8
+        // compass points so it only fires — and only triggers a React
+        // re-render in the parent — when the DISPLAYED letter would actually
+        // change, not on every fractional degree of easing. In North-Up
+        // mode the button always shows a fixed "N" regardless of this value
+        // (see RecenterButton), so this only visibly matters in Heading-Up.
+        if (onHeadingChangeRef.current) {
+          const cardinal = headingToCardinal(cameraHeadingRef.current);
+          if (cardinal !== lastReportedCardinalRef.current) {
+            lastReportedCardinalRef.current = cardinal;
+            onHeadingChangeRef.current(cardinal);
+          }
+        }
 
         // The arrow's ON-SCREEN rotation is relative to the camera's actual
         // rotation, not the raw compass heading — but ONLY on a vector map,

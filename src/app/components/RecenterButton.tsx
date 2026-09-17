@@ -7,15 +7,19 @@ interface RecenterButtonProps {
   onRecenter: () => void;
   t: Translations;
   followMode: boolean;
-  /** North-Up shows a fixed "N"; Heading-Up shows the rotating-compass arrow
-   * icon. Only meaningfully distinguishable while followMode is active — see
-   * handleRecenter in NavigationMapClient (tap to recenter, tap again to
-   * cycle mode once already following). */
+  /** North-Up shows a fixed "N"; Heading-Up shows the live compassLabel
+   * (N/NE/E/SE/S/SW/W/NW). Only meaningfully distinguishable while
+   * followMode is active — see handleRecenter in NavigationMapClient (tap
+   * to recenter, tap again to cycle mode once already following). */
   mapViewMode?: 'northUp' | 'headingUp';
+  /** Live geographic direction currently at the top of the screen, from
+   * MapCanvas's onHeadingChange. Only shown in Heading-Up + following. */
+  compassLabel?: string;
 }
 
-export default function RecenterButton({ onRecenter, t, followMode, mapViewMode = 'headingUp' }: RecenterButtonProps) {
+export default function RecenterButton({ onRecenter, t, followMode, mapViewMode = 'headingUp', compassLabel = 'N' }: RecenterButtonProps) {
   const isNorthUp = followMode && mapViewMode === 'northUp';
+  const isHeadingUp = followMode && mapViewMode === 'headingUp';
   return (
     <button
       onClick={onRecenter}
@@ -34,6 +38,8 @@ export default function RecenterButton({ onRecenter, t, followMode, mapViewMode 
     >
       {isNorthUp ? (
         <span className="text-sm font-bold leading-none select-none">N</span>
+      ) : isHeadingUp ? (
+        <span className="text-sm font-bold leading-none select-none">{compassLabel}</span>
       ) : (
         /* Compass / recenter icon — filled ring with arrow when follow active */
         <svg

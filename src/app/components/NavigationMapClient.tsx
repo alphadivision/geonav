@@ -33,7 +33,7 @@ import PinDestinationCard from './PinDestinationCard';
 import RecenterButton from './RecenterButton';
 import MapControlsPanel from './MapControlsPanel';
 import NavigationHUD from './NavigationHUD';
-import type { MapCanvasHandle } from './MapCanvas';
+import type { MapCanvasHandle, CompassLabel } from './MapCanvas';
 
 declare const google: typeof import('@types/google.maps') extends never
   ? any
@@ -174,6 +174,9 @@ export default function NavigationMapClient() {
   // match the vehicle's heading (only visually rotates on a vector map —
   // see USE_VECTOR_MAP in MapCanvas); 'northUp' keeps the camera fixed at 0.
   const [mapViewMode, setMapViewMode] = useState<'northUp' | 'headingUp'>('headingUp');
+  // Live compass direction (8-point), only updates when the displayed
+  // letter actually changes — see MapCanvas's onHeadingChange contract.
+  const [compassLabel, setCompassLabel] = useState<CompassLabel>('N');
   const [trafficEnabled, setTrafficEnabled] = useState(false);
   // Tap-to-navigate state
   const [pinDestination, setPinDestination] = useState<PinDestination | null>(null);
@@ -815,6 +818,7 @@ export default function NavigationMapClient() {
           followMode={followMode}
           navigationMode={navigationActive}
           mapViewMode={mapViewMode}
+          onHeadingChange={setCompassLabel}
           onFollowDisabled={handleFollowDisabled}
           onMapTap={handleMapTap}
           onOffRoute={handleOffRoute}
@@ -839,6 +843,7 @@ export default function NavigationMapClient() {
               t={t}
               followMode={followMode}
               mapViewMode={mapViewMode}
+              compassLabel={compassLabel}
             />
           </div>
         </div>
