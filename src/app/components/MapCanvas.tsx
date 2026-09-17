@@ -17,7 +17,7 @@ import {
   destinationPoint,
 } from '@/lib/mapbox';
 import { watchPosition, clearWatch } from '@/lib/geolocation';
-import { isTeslaBrowser } from '@/lib/device';
+import { getPerformanceMode } from '@/lib/performanceMode';
 
 /// <reference types="@types/google.maps" />
 declare const google: typeof globalThis.google;
@@ -122,6 +122,40 @@ function buildArrowSvg(headingDeg: number): string {
   </g>
 </svg>
 `;
+}
+
+// Caches the last known GPS fix so the NEXT session can open the map
+// centered near the user at a city-level zoom instead of always starting at
+// a whole-country view (GEORGIA_CENTER, zoom 7). The very first-ever visit
+// still has no cache and falls back to the country view — trading a fixed,
+// one-time cost for never blocking first paint on a live GPS fix (which can
+// take several seconds, or never resolve if permission is denied/pending).
+const LAST_POSITION_KEY = 'teslanav_last_position_v1';
+const LAST_POSITION_CACHE_ZOOM = 13;
+const LAST_POSITION_WRITE_INTERVAL_MS = 20000; // avoid writing to localStorage on every GPS tick
+
+function readCachedPosition(): [number, number] | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(LAST_POSITION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length === 2 && typeof parsed[0] === 'number' && typeof parsed[1] === 'number') {
+      return parsed as [number, number];
+    }
+  } catch {
+    // malformed/unavailable cache — ignore, fall back to the default view
+  }
+  return null;
+}
+
+function writeCachedPosition(coords: [number, number]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(LAST_POSITION_KEY, JSON.stringify(coords));
+  } catch {
+    // storage full/unavailable — non-critical, ignore
+  }
 }
 
 // Shortest signed difference between two angles in degrees, in range (-180, 180].
@@ -255,7 +289,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const animationFrameRef = useRef<number | null>(null);
     const isAnimatingRef = useRef(false);
     const lastFrameTimeRef = useRef(0);
-    const isTeslaRef = useRef(false);
+    const isLitePerfModeRef = useRef(false);
     const lastCameraStateRef = useRef<{ lat: number; lng: number; heading: number; zoom: number } | null>(null);
     const currentStyleRef = useRef<MapStyle>(mapStyle);
     const followModeRef = useRef(followMode);
@@ -266,6 +300,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const onOffRouteRef = useRef(onOffRoute);
     const activeRouteGeometryRef = useRef<Array<[number, number]> | null>(null);
     const lastOffRouteCheckRef = useRef<number>(0);
+    const lastPositionWriteRef = useRef<number>(0);
     const isDraggingRef = useRef(false);
     const isZoomingRef = useRef(false);
     const zoomTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -371,7 +406,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     // for panning/rotation, at roughly half the CPU/GPU cost of 60fps.
     const animateFrame = useCallback((timestamp?: number) => {
       const now = timestamp ?? performance.now();
-      if (isTeslaRef.current && now - lastFrameTimeRef.current < TESLA_FRAME_INTERVAL_MS) {
+      if (isLitePerfModeRef.current && now - lastFrameTimeRef.current < TESLA_FRAME_INTERVAL_MS) {
         animationFrameRef.current = requestAnimationFrame(animateFrame);
         return;
       }
@@ -485,9 +520,13 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
         const { Map } = mapsLib as google.maps.MapsLibrary;
 
+        const cachedPosition = readCachedPosition();
+
         map = new Map(containerRef.current, {
-          center: { lat: GEORGIA_CENTER[1], lng: GEORGIA_CENTER[0] },
-          zoom: 7,
+          center: cachedPosition
+            ? { lat: cachedPosition[1], lng: cachedPosition[0] }
+            : { lat: GEORGIA_CENTER[1], lng: GEORGIA_CENTER[0] },
+          zoom: cachedPosition ? LAST_POSITION_CACHE_ZOOM : 7,
           minZoom: 3,
           maxZoom: 20,
           mapTypeId: GOOGLE_MAP_TYPE[mapStyle],
@@ -633,6 +672,15 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
             userLocationRef.current = rawCoords;
 
+            // Throttled cache write for next session's initial map view (see
+            // readCachedPosition above) — not on every tick, just often
+            // enough to stay roughly current.
+            const nowTs = Date.now();
+            if (nowTs - lastPositionWriteRef.current > LAST_POSITION_WRITE_INTERVAL_MS) {
+              lastPositionWriteRef.current = nowTs;
+              writeCachedPosition(rawCoords);
+            }
+
             // Heading target: prefer device compass/GPS heading, fall back to
             // bearing derived from movement once it's large enough to be reliable.
             let newHeading: number | null = null;
@@ -739,9 +787,12 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Detect Tesla's browser once — used by animateFrame to throttle to ~24fps.
+    // Resolve the active performance mode once — used by animateFrame to
+    // throttle to ~24fps in 'lite' mode. Same getPerformanceMode() the CSS
+    // side (data-perf-mode, see NavigationMapClient/tailwind.css) uses, so a
+    // manual override affects both consistently.
     useEffect(() => {
-      isTeslaRef.current = isTeslaBrowser();
+      isLitePerfModeRef.current = getPerformanceMode() === 'lite';
     }, []);
 
     // The interpolation loop is NOT started here — it only runs while there's

@@ -7,6 +7,7 @@ import type { Language } from '@/lib/i18n';
 import type { MapStyle } from '@/types';
 import { getStoredLanguage, setStoredLanguage, getTranslations, TRAFFIC_KEY } from '@/lib/i18n';
 import { getCurrentPosition } from '@/lib/geolocation';
+import { getPerformanceMode, applyPerformanceModeToDocument } from '@/lib/performanceMode';
 import type {
   SearchResult,
   RouteInfo,
@@ -171,6 +172,12 @@ export default function NavigationMapClient() {
     // Restore traffic preference
     const storedTraffic = localStorage.getItem(TRAFFIC_KEY);
     if (storedTraffic === 'true') setTrafficEnabled(true);
+
+    // Tesla / low-performance mode: sets data-perf-mode on <html> so CSS can
+    // drop expensive backdrop-filter blur (see tailwind.css). Runs as early
+    // as possible (first effect on mount) so there's no visible "downgrade"
+    // flash after the glass panels have already rendered blurred.
+    applyPerformanceModeToDocument(getPerformanceMode());
   }, []);
 
   const t = getTranslations(language);
@@ -832,8 +839,7 @@ export default function NavigationMapClient() {
           data-no-map-tap
         >
           <div
-            className="mx-3 mb-3 rounded-2xl shadow-2xl shadow-black/70 px-4 py-4"
-            style={{ backdropFilter: 'blur(16px)', background: 'rgba(18,18,24,0.88)', border: '1px solid rgba(255,255,255,0.10)' }}
+            className="glass-panel mx-3 mb-3 rounded-2xl shadow-2xl shadow-black/70 px-4 py-4"
           >
             <p className="text-sm font-semibold text-white mb-3 text-center">
               {t.replaceDestination}

@@ -27,8 +27,7 @@ export default function PinDestinationCard({
 
   return (
     <div
-      className="mx-3 mb-3 rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
-      style={{ backdropFilter: 'blur(16px)', background: 'rgba(18,18,24,0.88)', border: '1px solid rgba(255,255,255,0.10)' }}
+      className="glass-panel mx-3 mb-3 rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
     >
       <div className="px-4 py-3">
         <div className="flex items-center gap-3 mb-3">

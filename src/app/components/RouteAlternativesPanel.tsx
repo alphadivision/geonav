@@ -55,18 +55,11 @@ export default function RouteAlternativesPanel({
 
   const selectedRoute = routes.find((r) => r.index === selectedIndex) ?? routes[0];
 
-  const cardStyle = {
-    backdropFilter: 'blur(16px)',
-    background: 'rgba(18,18,24,0.88)',
-    border: '1px solid rgba(255,255,255,0.10)',
-  };
-
   // ── Collapsed bar ──────────────────────────────────────────────────────────
   if (collapsed) {
     return (
       <div
-        className="mx-3 mb-3 rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
-        style={cardStyle}
+        className="glass-panel mx-3 mb-3 rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
       >
         <div
           onClick={() => setCollapsed(false)}
@@ -109,8 +102,7 @@ export default function RouteAlternativesPanel({
   // ── Expanded panel ─────────────────────────────────────────────────────────
   return (
     <div
-      className="mx-3 mb-3 rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
-      style={cardStyle}
+      className="glass-panel mx-3 mb-3 rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
     >
       {/* Active route indicator */}
       <div className="h-0.5 bg-primary w-full" />

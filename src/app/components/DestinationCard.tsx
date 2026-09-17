@@ -34,8 +34,7 @@ export default function DestinationCard({
   if (collapsed) {
     return (
       <div
-        className="mx-3 mb-3 rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
-        style={{ backdropFilter: 'blur(16px)', background: 'rgba(18,18,24,0.88)', border: '1px solid rgba(255,255,255,0.10)' }}
+        className="glass-panel mx-3 mb-3 rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
       >
         <button
           onClick={() => setCollapsed(false)}
@@ -83,8 +82,7 @@ export default function DestinationCard({
   // ── Expanded compact panel ─────────────────────────────────────────────────
   return (
     <div
-      className="mx-3 mb-3 rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
-      style={{ backdropFilter: 'blur(16px)', background: 'rgba(18,18,24,0.88)', border: '1px solid rgba(255,255,255,0.10)' }}
+      className="glass-panel mx-3 mb-3 rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
     >
       {/* Active route indicator */}
       {isRouteActive && <div className="h-0.5 bg-primary w-full" />}

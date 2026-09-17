@@ -20,12 +20,7 @@ interface NavigationHUDProps {
 export default function NavigationHUD({ destinationName, routeInfo, language, t, onExit }: NavigationHUDProps) {
   return (
     <div
-      className="rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
-      style={{
-        backdropFilter: 'blur(16px)',
-        background: 'rgba(18,18,24,0.88)',
-        border: '1px solid rgba(255,255,255,0.10)',
-      }}
+      className="glass-panel rounded-2xl overflow-hidden shadow-2xl shadow-black/70"
     >
       <div className="flex items-center gap-3 px-4 py-3">
         <div className="flex-shrink-0 w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center">

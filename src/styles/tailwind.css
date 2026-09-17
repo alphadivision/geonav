@@ -82,6 +82,29 @@
     border: 1px solid rgba(255, 255, 255, 0.08);
   }
 
+  /* Shared "frosted bottom-sheet" look — previously duplicated as an inline
+     style in 6 different components. Consolidated here so perf-mode (below)
+     only has to override it in one place. */
+  .glass-panel {
+    background: rgba(18, 18, 24, 0.88);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+  }
+
+  /* Tesla / low-performance mode: backdrop-filter forces the compositor to
+     continuously re-blur whatever's underneath these panels — expensive on
+     integrated GPUs, and especially costly here since the map is panning
+     and rotating underneath them throughout live navigation. Drop the blur
+     entirely and compensate with a more opaque flat background so the
+     panels stay legible without the frosted-glass compositing cost. */
+  [data-perf-mode='lite'] .glass-dark,
+  [data-perf-mode='lite'] .glass-panel {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(10, 10, 12, 0.97);
+  }
+
   .touch-target {
     min-width: 52px;
     min-height: 52px;
@@ -143,15 +166,6 @@
     }
   }
 
-  .pulse-dot {
-    animation: pulseDot 2s ease-in-out infinite;
-  }
-
-  @keyframes pulseDot {
-    0%, 100% { transform: scale(1); opacity: 1; }
-    50% { transform: scale(1.15); opacity: 0.8; }
-  }
-
   .spinner {
     animation: spin 0.8s linear infinite;
   }
@@ -159,26 +173,6 @@
   @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
-  }
-
-  .mapboxgl-ctrl-logo {
-    display: none !important;
-  }
-
-  .mapboxgl-ctrl-attrib {
-    display: none !important;
-  }
-
-  .mapboxgl-ctrl-bottom-right {
-    display: none !important;
-  }
-
-  .mapboxgl-ctrl-bottom-left {
-    display: none !important;
-  }
-
-  .route-line-glow {
-    filter: drop-shadow(0 0 6px rgba(26, 115, 232, 0.6));
   }
 
   .text-tabular {
