@@ -87,7 +87,7 @@ export default function MapControlsPanel({
       {open && (
         <div
           className={[
-            'absolute left-0 bottom-full mb-2',
+            'absolute right-0 bottom-full mb-2',
             'glass-dark rounded-2xl shadow-2xl shadow-black/60',
             'w-[240px] overflow-hidden border border-white/10',
           ].join(' ')}

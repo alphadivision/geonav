@@ -17,6 +17,8 @@ import type {
   AppState,
   ErrorType,
   DirectionsResponse,
+  TrafficSegment,
+  TrafficSpeedCategory,
 } from '@/types';
 import SearchBar from './SearchBar';
 import ZoomControls from './ZoomControls';
@@ -128,6 +130,31 @@ function parseDurSec(durationStr: string): number {
   const match = durationStr.match(/^(\d+(?:\.\d+)?)s$/);
   if (match) return Math.round(parseFloat(match[1]));
   return 0;
+}
+
+// Converts the Routes API's real `travelAdvisory.speedReadingIntervals` into
+// our TrafficSegment[] shape. Per Google's docs the intervals are contiguous
+// and cover the whole polyline without overlap, but each interval's start
+// index is OPTIONAL and defaults to the previous interval's end (0 for the
+// first) — this reconstructs the implied start explicitly so downstream
+// rendering never has to guess. Returns undefined (not a fabricated single
+// segment) when the API didn't return this data at all.
+function buildTrafficSegments(
+  intervals: Array<{ startPolylinePointIndex?: number; endPolylinePointIndex: number; speed: TrafficSpeedCategory }> | undefined,
+  coordCount: number
+): TrafficSegment[] | undefined {
+  if (!intervals || intervals.length === 0) return undefined;
+  const segments: TrafficSegment[] = [];
+  let cursor = 0;
+  for (const interval of intervals) {
+    const start = interval.startPolylinePointIndex ?? cursor;
+    const end = Math.min(interval.endPolylinePointIndex, coordCount - 1);
+    if (end > start) {
+      segments.push({ startIdx: start, endIdx: end, category: interval.speed });
+    }
+    cursor = interval.endPolylinePointIndex;
+  }
+  return segments.length > 0 ? segments : undefined;
 }
 
 export default function NavigationMapClient() {
@@ -249,7 +276,7 @@ export default function NavigationMapClient() {
             headers: {
               'Content-Type': 'application/json',
               'X-Goog-Api-Key': apiKey,
-              'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.staticDuration,routes.polyline.encodedPolyline,routes.legs.distanceMeters,routes.legs.duration,routes.legs.steps.distanceMeters,routes.legs.steps.staticDuration,routes.legs.steps.navigationInstruction',
+              'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.staticDuration,routes.polyline.encodedPolyline,routes.legs.distanceMeters,routes.legs.duration,routes.legs.steps.distanceMeters,routes.legs.steps.staticDuration,routes.legs.steps.navigationInstruction,routes.travelAdvisory.speedReadingIntervals',
             },
             body: JSON.stringify(requestBody),
           });
@@ -274,6 +301,13 @@ export default function NavigationMapClient() {
                     intersections?: Array<{ classes?: string[] }>;
                   }>;
                 }>;
+                travelAdvisory?: {
+                  speedReadingIntervals?: Array<{
+                    startPolylinePointIndex?: number;
+                    endPolylinePointIndex: number;
+                    speed: 'NORMAL' | 'SLOW' | 'TRAFFIC_JAM';
+                  }>;
+                };
               }>;
             };
 
@@ -292,6 +326,7 @@ export default function NavigationMapClient() {
                   duration: parseDurSec(step.staticDuration || '0s'),
                   intersections: step.intersections || [{ classes: [] }],
                 }));
+                const trafficSegments = buildTrafficSegments(route.travelAdvisory?.speedReadingIntervals, coords.length);
                 return {
                   index: idx,
                   distance: route.distanceMeters,
@@ -302,6 +337,7 @@ export default function NavigationMapClient() {
                     duration: parseDurSec(leg?.duration ?? route.duration ?? '0s'),
                     steps,
                   }],
+                  trafficSegments,
                 };
               });
 
@@ -315,6 +351,7 @@ export default function NavigationMapClient() {
                 geometry: route.geometry,
                 roadType: detectRoadType(route as DirectionsResponse['routes'][0]),
                 isFastest: route.duration === fastestDuration,
+                trafficSegments: route.trafficSegments,
               }));
 
               console.log(`[fetchRoutes] SUCCESS — ${alternatives.length} route(s), first has ${decoded[0].geometry.coordinates.length} coords`);
@@ -746,11 +783,6 @@ export default function NavigationMapClient() {
   const showNavigationHud =
     navigationActive && appState === 'routeActive' && !!selectedDestination;
 
-  // Bottom sheets (destination/route/pin cards) are anchored bottom-left and
-  // would overlap the brand/settings/help cluster, so hide it while one is open.
-  const hideBottomLeftChrome =
-    showBottomPanel || showRouteAlternatives || showNavigationHud || !!pinDestination || !!showReplacePrompt;
-
   return (
     <div className="fixed inset-0 overflow-hidden bg-background no-select">
       {/* Full-screen map canvas */}
@@ -794,29 +826,22 @@ export default function NavigationMapClient() {
         </div>
       </div>
 
-      {/* Bottom-left: collapsible Map Controls (hidden while a bottom sheet is open) */}
-      {!hideBottomLeftChrome && (
-        <div
-          className="fixed left-3 sm:left-4 bottom-4 z-panel flex items-center gap-2"
-          data-no-map-tap
-        >
-          <MapControlsPanel
-            language={language}
-            onLanguageChange={handleLanguageChange}
-            currentStyle={mapStyle}
-            onStyleChange={handleMapStyleChange}
-            trafficEnabled={trafficEnabled}
-            onTrafficToggle={handleTrafficToggle}
-            t={t}
-          />
-        </div>
-      )}
-
-      {/* Bottom-right: zoom + locate (primary, always-visible controls) */}
+      {/* Bottom-right: persistent map controls — Settings, Zoom, Locate.
+          Always rendered regardless of route/navigation state (never gated
+          behind hideBottomLeftChrome-style conditions), matching Zoom/Locate. */}
       <div
         className="fixed right-3 sm:right-4 bottom-4 z-panel flex items-center gap-2"
         data-no-map-tap
       >
+        <MapControlsPanel
+          language={language}
+          onLanguageChange={handleLanguageChange}
+          currentStyle={mapStyle}
+          onStyleChange={handleMapStyleChange}
+          trafficEnabled={trafficEnabled}
+          onTrafficToggle={handleTrafficToggle}
+          t={t}
+        />
         <ZoomControls
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}

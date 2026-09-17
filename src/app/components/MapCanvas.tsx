@@ -8,7 +8,7 @@ import React, {
   useCallback,
 } from 'react';
 import { setOptions, importLibrary } from '@googlemaps/js-api-loader';
-import type { UserLocation, MapStyle, RouteAlternative } from '@/types';
+import type { UserLocation, MapStyle, RouteAlternative, TrafficSegment } from '@/types';
 import type { Language } from '@/lib/i18n';
 import {
   GEORGIA_CENTER,
@@ -327,8 +327,8 @@ function pointToSegmentDistance(
 function trimRouteAtPosition(
   route: Array<[number, number]>,
   pos: [number, number]
-): Array<[number, number]> {
-  if (route.length < 2) return route;
+): { path: Array<[number, number]>; consumedIdx: number } {
+  if (route.length < 2) return { path: route, consumedIdx: 0 };
 
   let bestDist = Infinity;
   let bestIdx = 0;
@@ -354,7 +354,61 @@ function trimRouteAtPosition(
     }
   }
 
-  return [bestProj, ...route.slice(bestIdx + 1)];
+  return { path: [bestProj, ...route.slice(bestIdx + 1)], consumedIdx: bestIdx };
+}
+
+// Re-expresses traffic segments (index ranges into a route's coordinate
+// array) after trimRouteAtPosition has dropped `consumedIdx` original points
+// off the front and replaced them with a single projected point at index 0.
+// Segments fully behind the new index 0 are dropped; the segment straddling
+// the cut is clamped to start at the new index 0.
+function shiftTrafficSegments(
+  segments: TrafficSegment[] | null,
+  consumedIdx: number
+): TrafficSegment[] | null {
+  if (!segments || consumedIdx <= 0) return segments;
+  const shifted: TrafficSegment[] = [];
+  for (const seg of segments) {
+    const endIdx = seg.endIdx - consumedIdx;
+    if (endIdx <= 0) continue; // fully behind the vehicle now
+    const startIdx = Math.max(0, seg.startIdx - consumedIdx);
+    shifted.push({ startIdx, endIdx, category: seg.category });
+  }
+  return shifted;
+}
+
+// Renders the active A→B route as one or more colored polylines (blue /
+// yellow / red, per real Routes API traffic data) drawn from a fixed,
+// bounded pool — never creates/destroys map objects per update. Adjacent
+// segments share their boundary coordinate so there is no visual gap.
+// Falls back to a single all-blue segment when no traffic data is available
+// (never fabricates categories).
+function renderRouteWithTraffic(
+  pool: google.maps.Polyline[],
+  coordinates: Array<[number, number]>,
+  segments: TrafficSegment[] | null | undefined
+) {
+  const path = coordinates.map(([lng, lat]) => ({ lat, lng }));
+  const effective: TrafficSegment[] =
+    segments && segments.length > 0
+      ? segments
+      : [{ startIdx: 0, endIdx: coordinates.length - 1, category: 'NORMAL' }];
+
+  let used = 0;
+  for (const seg of effective) {
+    if (used >= pool.length) break;
+    const start = Math.max(0, seg.startIdx);
+    const end = Math.min(coordinates.length - 1, seg.endIdx);
+    const segPath = path.slice(start, end + 1);
+    if (segPath.length < 2) continue;
+    const poly = pool[used];
+    poly.setPath(segPath);
+    poly.setOptions({ strokeColor: TRAFFIC_SEGMENT_COLOR[seg.category] });
+    used++;
+  }
+  for (let i = used; i < pool.length; i++) {
+    pool[i].setPath([]);
+  }
 }
 
 interface MapCanvasProps {
@@ -394,6 +448,19 @@ export interface MapCanvasHandle {
 
 const MAX_ALT_ROUTES = 3;
 
+// Bounded pool of polylines used to render the active A→B route as
+// contiguous traffic-colored segments (see renderRouteWithTraffic). Real
+// routes from the Routes API rarely carry more than a handful of distinct
+// speedReadingIntervals; this cap just guards against a pathological
+// response creating unbounded map objects.
+const MAX_ROUTE_SEGMENTS = 24;
+
+const TRAFFIC_SEGMENT_COLOR: Record<TrafficSegment['category'], string> = {
+  NORMAL: '#1a73e8', // same blue as the previous single-color route line
+  SLOW: '#fbbc04',
+  TRAFFIC_JAM: '#ea4335',
+};
+
 const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
   (
     {
@@ -425,7 +492,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const trafficLayerRef = useRef<google.maps.TrafficLayer | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
 
     // Route polylines
-    const mainRoutePolylineRef = useRef<google.maps.Polyline | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const mainRouteSegmentPolylinesRef = useRef<google.maps.Polyline[]>([]); // eslint-disable-line @typescript-eslint/no-explicit-any
     const mainRouteCasingRef = useRef<google.maps.Polyline | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
     const altRoutePolylinesRef = useRef<Array<{ casing: google.maps.Polyline; line: google.maps.Polyline }>>([]); // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -451,6 +518,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const onMapTapRef = useRef(onMapTap);
     const onOffRouteRef = useRef(onOffRoute);
     const activeRouteGeometryRef = useRef<Array<[number, number]> | null>(null);
+    const activeRouteSegmentsRef = useRef<TrafficSegment[] | null>(null);
     const lastOffRouteCheckRef = useRef<number>(0);
     const lastRouteTrimRef = useRef<number>(0);
     const lastPositionWriteRef = useRef<number>(0);
@@ -588,12 +656,13 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         if (navigationModeRef.current && activeRouteGeometryRef.current && activeRouteGeometryRef.current.length > 1) {
           if (now - lastRouteTrimRef.current > ROUTE_TRIM_INTERVAL_MS) {
             lastRouteTrimRef.current = now;
-            const trimmed = trimRouteAtPosition(activeRouteGeometryRef.current, nextPosition);
+            const { path: trimmed, consumedIdx } = trimRouteAtPosition(activeRouteGeometryRef.current, nextPosition);
             if (trimmed.length !== activeRouteGeometryRef.current.length) {
               activeRouteGeometryRef.current = trimmed;
+              activeRouteSegmentsRef.current = shiftTrafficSegments(activeRouteSegmentsRef.current, consumedIdx);
               const path = trimmed.map(([lng, lat]) => ({ lat, lng }));
               mainRouteCasingRef.current?.setPath(path);
-              mainRoutePolylineRef.current?.setPath(path);
+              renderRouteWithTraffic(mainRouteSegmentPolylinesRef.current, trimmed, activeRouteSegmentsRef.current);
             }
           }
         }
@@ -709,14 +778,21 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           strokeOpacity: 0.9,
           zIndex: 1,
         });
-        mainRoutePolylineRef.current = new google.maps.Polyline({
-          map,
-          path: [],
-          strokeColor: '#1a73e8',
-          strokeWeight: 7,
-          strokeOpacity: 1,
-          zIndex: 2,
-        });
+        // Fixed pool of segment polylines for the active A→B route — real
+        // per-segment traffic coloring (see renderRouteWithTraffic), never
+        // created/destroyed at runtime.
+        for (let i = 0; i < MAX_ROUTE_SEGMENTS; i++) {
+          mainRouteSegmentPolylinesRef.current.push(
+            new google.maps.Polyline({
+              map,
+              path: [],
+              strokeColor: TRAFFIC_SEGMENT_COLOR.NORMAL,
+              strokeWeight: 7,
+              strokeOpacity: 1,
+              zIndex: 2,
+            })
+          );
+        }
 
         // Initialize alt route polylines
         for (let i = 0; i < MAX_ALT_ROUTES; i++) {
@@ -902,7 +978,8 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         pinMarkerRef.current?.setMap(null);
         userArrowMarkerRef.current?.setMap(null);
         trafficLayerRef.current?.setMap(null);
-        mainRoutePolylineRef.current?.setMap(null);
+        mainRouteSegmentPolylinesRef.current.forEach((poly) => poly.setMap(null));
+        mainRouteSegmentPolylinesRef.current = [];
         mainRouteCasingRef.current?.setMap(null);
         altRoutePolylinesRef.current.forEach(({ casing, line }) => {
           casing.setMap(null);
@@ -971,12 +1048,14 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           if (geometry) {
             const path = geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
             mainRouteCasingRef.current?.setPath(path);
-            mainRoutePolylineRef.current?.setPath(path);
             activeRouteGeometryRef.current = geometry.coordinates as [number, number][];
+            activeRouteSegmentsRef.current = null;
+            renderRouteWithTraffic(mainRouteSegmentPolylinesRef.current, activeRouteGeometryRef.current, null);
           } else {
             mainRouteCasingRef.current?.setPath([]);
-            mainRoutePolylineRef.current?.setPath([]);
+            mainRouteSegmentPolylinesRef.current.forEach((poly) => poly.setPath([]));
             activeRouteGeometryRef.current = null;
+            activeRouteSegmentsRef.current = null;
           }
         },
 
@@ -1003,8 +1082,9 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           if (selected) {
             const path = selected.geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
             mainRouteCasingRef.current?.setPath(path);
-            mainRoutePolylineRef.current?.setPath(path);
             activeRouteGeometryRef.current = selected.geometry.coordinates as [number, number][];
+            activeRouteSegmentsRef.current = selected.trafficSegments ?? null;
+            renderRouteWithTraffic(mainRouteSegmentPolylinesRef.current, activeRouteGeometryRef.current, activeRouteSegmentsRef.current);
           }
         },
 
@@ -1030,8 +1110,9 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           if (selected) {
             const path = selected.geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
             mainRouteCasingRef.current?.setPath(path);
-            mainRoutePolylineRef.current?.setPath(path);
             activeRouteGeometryRef.current = selected.geometry.coordinates as [number, number][];
+            activeRouteSegmentsRef.current = selected.trafficSegments ?? null;
+            renderRouteWithTraffic(mainRouteSegmentPolylinesRef.current, activeRouteGeometryRef.current, activeRouteSegmentsRef.current);
           }
         },
 

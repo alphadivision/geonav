@@ -16,6 +16,21 @@ export interface RouteInfo {
   };
 }
 
+export type TrafficSpeedCategory = 'NORMAL' | 'SLOW' | 'TRAFFIC_JAM';
+
+// A contiguous run of the route's coordinate array sharing one traffic
+// condition, as reported by the Routes API's per-route
+// `travelAdvisory.speedReadingIntervals` (real, segment-level traffic data —
+// see NavigationMapClient's fetchRoutes). startIdx/endIdx are inclusive
+// indices into RouteAlternative.geometry.coordinates, and adjacent segments
+// share their boundary point so the route can be rendered as multiple
+// colored polylines with no visual gap between them.
+export interface TrafficSegment {
+  startIdx: number;
+  endIdx: number;
+  category: TrafficSpeedCategory;
+}
+
 export interface RouteAlternative {
   index: number;
   distance: number; // meters
@@ -26,6 +41,10 @@ export interface RouteAlternative {
   };
   roadType: 'highway' | 'mainRoad' | 'localRoad';
   isFastest: boolean;
+  // Only populated when the Routes API returns real segment-level traffic
+  // data for this route. Absent (not faked) when unavailable, e.g. from the
+  // legacy server-side /api/directions fallback.
+  trafficSegments?: TrafficSegment[];
 }
 
 export interface PinDestination {
