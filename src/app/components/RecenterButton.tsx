@@ -8,18 +8,18 @@ interface RecenterButtonProps {
   t: Translations;
   followMode: boolean;
   /** North-Up shows a fixed "N"; Heading-Up shows the live compassLabel
-   * (N/NE/E/SE/S/SW/W/NW). Only meaningfully distinguishable while
-   * followMode is active — see handleRecenter in NavigationMapClient (tap
-   * to recenter, tap again to cycle mode once already following). */
+   * (N/NE/E/SE/S/SW/W/NW) — always reflects the current mode, regardless of
+   * followMode (which only controls the button's active/inactive color).
+   * See handleRecenter in NavigationMapClient: every tap toggles the mode. */
   mapViewMode?: 'northUp' | 'headingUp';
   /** Live geographic direction currently at the top of the screen, from
-   * MapCanvas's onHeadingChange. Only shown in Heading-Up + following. */
+   * MapCanvas's onHeadingChange. Only meaningful in Heading-Up mode. */
   compassLabel?: string;
 }
 
-export default function RecenterButton({ onRecenter, t, followMode, mapViewMode = 'headingUp', compassLabel = 'N' }: RecenterButtonProps) {
-  const isNorthUp = followMode && mapViewMode === 'northUp';
-  const isHeadingUp = followMode && mapViewMode === 'headingUp';
+export default function RecenterButton({ onRecenter, t, followMode, mapViewMode = 'northUp', compassLabel = 'N' }: RecenterButtonProps) {
+  const isNorthUp = mapViewMode === 'northUp';
+  const isHeadingUp = mapViewMode === 'headingUp';
   return (
     <button
       onClick={onRecenter}

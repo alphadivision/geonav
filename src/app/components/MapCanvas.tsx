@@ -503,7 +503,7 @@ interface MapCanvasProps {
    * at 0 (map fixed, arrow rotates freely); 'headingUp' eases the camera
    * heading to match the vehicle's true heading (map rotates underneath a
    * screen-fixed arrow — only visually rotates on a vector map, see
-   * USE_VECTOR_MAP). Defaults to 'headingUp' to preserve prior behavior. */
+   * USE_VECTOR_MAP). Defaults to 'northUp' — North-Up is the default mode. */
   mapViewMode?: 'northUp' | 'headingUp';
   /** Fires only when the map's current camera-heading crosses into a new
    * 45°-wide compass bucket (N/NE/E/SE/S/SW/W/NW) — not on every fractional
@@ -578,7 +578,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       onMapTap,
       onOffRoute,
       navigationMode = false,
-      mapViewMode = 'headingUp',
+      mapViewMode = 'northUp',
       onHeadingChange,
     },
     ref

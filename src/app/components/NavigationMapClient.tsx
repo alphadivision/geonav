@@ -173,7 +173,7 @@ export default function NavigationMapClient() {
   // Compass view mode (top-right button): 'headingUp' rotates the map to
   // match the vehicle's heading (only visually rotates on a vector map —
   // see USE_VECTOR_MAP in MapCanvas); 'northUp' keeps the camera fixed at 0.
-  const [mapViewMode, setMapViewMode] = useState<'northUp' | 'headingUp'>('headingUp');
+  const [mapViewMode, setMapViewMode] = useState<'northUp' | 'headingUp'>('northUp');
   // Live compass direction (8-point), only updates when the displayed
   // letter actually changes — see MapCanvas's onHeadingChange contract.
   const [compassLabel, setCompassLabel] = useState<CompassLabel>('N');
@@ -775,21 +775,17 @@ export default function NavigationMapClient() {
     );
   }, []);
 
-  // Tap the compass: the FIRST press (whenever we're not already following —
-  // including the very first tap ever, and any tap after a manual pan
-  // disabled follow) always and deterministically activates Heading-Up:
-  // resumes follow AND forces the rotating-map mode, regardless of whatever
-  // mode was last active. Pressing again while ALREADY following toggles
-  // North-Up/Heading-Up — the standard "tap once to recenter, tap again to
-  // toggle rotation lock" pattern used by Google Maps/Waze.
+  // Tap the compass: unconditionally alternates North-Up <-> Heading-Up on
+  // every tap — a plain, reliable toggle, independent of follow state. If
+  // follow mode isn't already active, tapping also resumes it (recenters),
+  // same as before; that's a side effect on top of the toggle, never a
+  // precondition for it.
   const handleRecenter = useCallback(() => {
-    if (followMode) {
-      setMapViewMode((mode) => (mode === 'northUp' ? 'headingUp' : 'northUp'));
-      return;
+    setMapViewMode((mode) => (mode === 'northUp' ? 'headingUp' : 'northUp'));
+    if (!followMode) {
+      setFollowMode(true);
+      if (mapRef.current) mapRef.current.locateUser();
     }
-    setMapViewMode('headingUp');
-    setFollowMode(true);
-    if (mapRef.current) mapRef.current.locateUser();
   }, [followMode]);
 
   const handleDismissError = useCallback(() => {
