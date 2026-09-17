@@ -14,7 +14,6 @@ import {
   GEORGIA_CENTER,
   calculateBearing,
   haversineDistance,
-  smoothHeading,
 } from '@/lib/mapbox';
 import { watchPosition, clearWatch } from '@/lib/geolocation';
 
@@ -22,11 +21,17 @@ import { watchPosition, clearWatch } from '@/lib/geolocation';
 declare const google: typeof globalThis.google;
 
 const MIN_MOVEMENT_FOR_BEARING = 3;
-const HEADING_SMOOTH_ALPHA = 0.3;
-const CAMERA_BEARING_ALPHA = 0.15;
-const MIN_CAMERA_MOVE = 2;
 const NAV_ZOOM = 16;
-// NAV_FOLLOW_DURATION and NAV_RECENTER_DURATION reserved for future animation tuning
+
+// Continuous per-frame interpolation (runs every animation frame, independent
+// of how often GPS actually reports a new fix) — this is what makes the arrow
+// and camera glide smoothly instead of jumping once per GPS tick.
+const POSITION_LERP_ALPHA = 0.18; // marker position easing toward latest GPS fix
+const ARROW_HEADING_LERP_ALPHA = 0.25; // marker rotation easing (snappier)
+const CAMERA_BEARING_ALPHA = 0.12; // camera rotation easing (slightly slower, less twitchy)
+const ARROW_ICON_UPDATE_THRESHOLD_DEG = 1.5; // skip SVG/blob regen for imperceptible heading deltas
+const CAMERA_MOVE_THRESHOLD_M = 0.1; // skip redundant moveCamera calls once converged
+const CAMERA_HEADING_THRESHOLD_DEG = 0.1;
 
 const OFF_ROUTE_THRESHOLD = 80;
 const OFF_ROUTE_CHECK_INTERVAL = 5000;
@@ -81,13 +86,31 @@ const MAP_STYLES_CONFIG: Record<MapStyle, Array<{ elementType?: string; featureT
   streets: STREETS_STYLES,
 };
 
-const ARROW_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
-  <circle cx="20" cy="20" r="18" fill="#1a73e8" fill-opacity="0.22" stroke="#1a73e8" stroke-width="1.5" stroke-opacity="0.5"/>
-  <polygon points="20,4 28,30 20,24 12,30" fill="#e53935" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/>
-  <circle cx="20" cy="24" r="4" fill="#ffffff" stroke="#e53935" stroke-width="2"/>
+// Google Maps' image-based Marker `icon` has no native `rotation` support
+// (that only exists on vector `Symbol` icons), so heading is baked directly
+// into the SVG markup via a <g transform="rotate(...)"> around the arrow only
+// — the circular puck background stays visually unaffected by rotation.
+const ARROW_SIZE = 44;
+const ARROW_CENTER = ARROW_SIZE / 2;
+function buildArrowSvg(headingDeg: number): string {
+  return `
+<svg xmlns="http://www.w3.org/2000/svg" width="${ARROW_SIZE}" height="${ARROW_SIZE}" viewBox="0 0 ${ARROW_SIZE} ${ARROW_SIZE}">
+  <circle cx="${ARROW_CENTER}" cy="${ARROW_CENTER}" r="20" fill="#121a2e" stroke="#1a2744" stroke-width="1.5"/>
+  <circle cx="${ARROW_CENTER}" cy="${ARROW_CENTER}" r="20" fill="none" stroke="#1a73e8" stroke-opacity="0.35" stroke-width="1.5"/>
+  <g transform="rotate(${headingDeg} ${ARROW_CENTER} ${ARROW_CENTER})">
+    <path d="M22 8 L31 32 L22 26 L13 32 Z" fill="#e63946" stroke="#ffffff" stroke-width="1.75" stroke-linejoin="round"/>
+  </g>
 </svg>
 `;
+}
+
+// Shortest signed difference between two angles in degrees, in range (-180, 180].
+function angleDiff(from: number, to: number): number {
+  let diff = (to - from) % 360;
+  if (diff > 180) diff -= 360;
+  if (diff < -180) diff += 360;
+  return diff;
+}
 
 function smoothPosition(
   prev: [number, number] | null,
@@ -183,8 +206,9 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     // Markers
     const destinationMarkerRef = useRef<google.maps.Marker | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
     const pinMarkerRef = useRef<google.maps.Marker | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
-    const userMarkerRef = useRef<google.maps.Marker | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
     const userArrowMarkerRef = useRef<google.maps.Marker | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const arrowIconUrlRef = useRef<string | null>(null);
+    const lastIconHeadingRef = useRef<number>(0);
     const accuracyCircleRef = useRef<google.maps.Circle | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
     const trafficLayerRef = useRef<google.maps.TrafficLayer | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -194,12 +218,16 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const altRoutePolylinesRef = useRef<Array<{ casing: google.maps.Polyline; line: google.maps.Polyline }>>([]); // eslint-disable-line @typescript-eslint/no-explicit-any
 
     // State refs
+    // userLocationRef: latest raw GPS fix (the interpolation "target")
+    // renderedPositionRef: continuously-interpolated position actually drawn on screen each frame
     const userLocationRef = useRef<[number, number] | null>(null);
-    const smoothedPositionRef = useRef<[number, number] | null>(null);
+    const renderedPositionRef = useRef<[number, number] | null>(null);
     const hasInitialLocationRef = useRef(false);
+    const targetHeadingRef = useRef<number>(0);
     const currentHeadingRef = useRef<number>(0);
     const cameraHeadingRef = useRef<number>(0);
-    const prevPositionRef = useRef<[number, number] | null>(null);
+    const animationFrameRef = useRef<number | null>(null);
+    const lastCameraStateRef = useRef<{ lat: number; lng: number; heading: number } | null>(null);
     const currentStyleRef = useRef<MapStyle>(mapStyle);
     const followModeRef = useRef(followMode);
     const onFollowDisabledRef = useRef(onFollowDisabled);
@@ -211,7 +239,6 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const isDraggingRef = useRef(false);
     const isZoomingRef = useRef(false);
     const zoomTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const cameraRafRef = useRef<number | null>(null);
     const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
 
     // Keep refs in sync with props
@@ -248,8 +275,33 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       currentStyleRef.current = style;
     }, []);
 
+    // Regenerate the marker's SVG icon with heading baked in. Only called when
+    // the heading has actually moved enough to matter (see updateArrowMarker),
+    // so this isn't invoked on every animation frame — avoids blob churn.
+    const setArrowIcon = useCallback((headingDeg: number) => {
+      const marker = userArrowMarkerRef.current;
+      if (!marker) return;
+
+      const svg = buildArrowSvg(Math.round(headingDeg * 10) / 10);
+      const blob = new Blob([svg], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      const prevUrl = arrowIconUrlRef.current;
+
+      marker.setIcon({
+        url,
+        scaledSize: new google.maps.Size(ARROW_SIZE, ARROW_SIZE),
+        anchor: new google.maps.Point(ARROW_CENTER, ARROW_CENTER),
+      });
+
+      arrowIconUrlRef.current = url;
+      if (prevUrl) URL.revokeObjectURL(prevUrl);
+    }, []);
+
+    // Moves the user marker and — only when its heading changed meaningfully —
+    // regenerates its rotated icon. Called every animation frame with the
+    // continuously-interpolated position/heading (see animateFrame below).
     const updateArrowMarker = useCallback((coords: [number, number], heading: number) => {
-      let map = mapRef.current;
+      const map = mapRef.current;
       if (!map || !isMapReadyRef.current) return;
       const position = { lat: coords[1], lng: coords[0] };
 
@@ -260,41 +312,56 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           zIndex: 10,
           optimized: false,
         });
-      } else {
-        userArrowMarkerRef.current.setPosition(position);
+        setArrowIcon(heading);
+        lastIconHeadingRef.current = heading;
+        return;
       }
 
-      const blob = new Blob([ARROW_SVG], { type: 'image/svg+xml' });
-      const url = URL.createObjectURL(blob);
-      userArrowMarkerRef.current.setIcon({
-        url,
-        scaledSize: new google.maps.Size(40, 40),
-        anchor: new google.maps.Point(20, 20),
-        rotation: heading,
-      } as google.maps.Icon & { rotation: number });
-    }, []);
+      userArrowMarkerRef.current.setPosition(position);
 
-    const applyFollowMode = useCallback((coords: [number, number], bearing: number) => {
-      let map = mapRef.current;
-      if (!map || !followModeRef.current) return;
+      if (Math.abs(angleDiff(lastIconHeadingRef.current, heading)) >= ARROW_ICON_UPDATE_THRESHOLD_DEG) {
+        setArrowIcon(heading);
+        lastIconHeadingRef.current = heading;
+      }
+    }, [setArrowIcon]);
 
-      if (cameraRafRef.current !== null) {
-        cancelAnimationFrame(cameraRafRef.current);
+    // Continuous per-frame loop: eases the rendered position/heading toward the
+    // latest real GPS fix (userLocationRef / targetHeadingRef), so the marker
+    // and — when follow mode is active — the camera glide smoothly instead of
+    // jumping once per GPS update. Runs for the lifetime of the component.
+    const animateFrame = useCallback(() => {
+      const map = mapRef.current;
+      const target = userLocationRef.current;
+
+      if (map && isMapReadyRef.current && target) {
+        const current = renderedPositionRef.current ?? target;
+        const nextPosition = smoothPosition(current, target, POSITION_LERP_ALPHA);
+        renderedPositionRef.current = nextPosition;
+
+        currentHeadingRef.current = currentHeadingRef.current + angleDiff(currentHeadingRef.current, targetHeadingRef.current) * ARROW_HEADING_LERP_ALPHA;
+        cameraHeadingRef.current = cameraHeadingRef.current + angleDiff(cameraHeadingRef.current, targetHeadingRef.current) * CAMERA_BEARING_ALPHA;
+
+        updateArrowMarker(nextPosition, currentHeadingRef.current);
+        accuracyCircleRef.current?.setCenter({ lat: nextPosition[1], lng: nextPosition[0] });
+
+        if (followModeRef.current) {
+          const last = lastCameraStateRef.current;
+          const moved = !last || haversineDistance([last.lng, last.lat], nextPosition) > CAMERA_MOVE_THRESHOLD_M;
+          const turned = !last || Math.abs(angleDiff(last.heading, cameraHeadingRef.current)) > CAMERA_HEADING_THRESHOLD_DEG;
+          if (moved || turned) {
+            map.moveCamera({
+              center: { lat: nextPosition[1], lng: nextPosition[0] },
+              heading: cameraHeadingRef.current,
+              zoom: NAV_ZOOM,
+              tilt: 0,
+            });
+            lastCameraStateRef.current = { lat: nextPosition[1], lng: nextPosition[0], heading: cameraHeadingRef.current };
+          }
+        }
       }
 
-      cameraRafRef.current = requestAnimationFrame(() => {
-        cameraRafRef.current = null;
-        const m = mapRef.current;
-        if (!m || !followModeRef.current) return;
-
-        m.moveCamera({
-          center: { lat: coords[1], lng: coords[0] },
-          heading: bearing,
-          zoom: NAV_ZOOM,
-          tilt: 0,
-        });
-      });
-    }, []);
+      animationFrameRef.current = requestAnimationFrame(animateFrame);
+    }, [updateArrowMarker]);
 
     useEffect(() => {
       if (isMapReadyRef.current) {
@@ -464,82 +531,52 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         isMapReadyRef.current = true;
         onMapReady();
 
-        // Watch user location
+        // Watch user location. This only records the latest raw fix and derived
+        // heading as interpolation *targets* — the actual marker/camera drawing
+        // happens continuously in animateFrame (see above), not here, so the
+        // display is smooth even though GPS itself only ticks ~1/s.
         watchIdRef.current = watchPosition(
           (location) => {
             onUserLocationUpdate(location);
             const rawCoords: [number, number] = [location.lng, location.lat];
             const prev = userLocationRef.current;
 
-            const moveDist = prev ? haversineDistance(prev, rawCoords) : Infinity;
-            const isSignificantMove = moveDist >= MIN_CAMERA_MOVE;
-
             userLocationRef.current = rawCoords;
+
+            // Heading target: prefer device compass/GPS heading, fall back to
+            // bearing derived from movement once it's large enough to be reliable.
+            let newHeading: number | null = null;
+            if (location.heading != null && !isNaN(location.heading) && location.heading >= 0) {
+              newHeading = location.heading;
+            } else if (prev !== null) {
+              const dist = haversineDistance(prev, rawCoords);
+              if (dist >= MIN_MOVEMENT_FOR_BEARING) {
+                newHeading = calculateBearing(prev, rawCoords);
+              }
+            }
+            if (newHeading !== null) {
+              targetHeadingRef.current = newHeading;
+            }
 
             if (!map || !isMapReadyRef.current) return;
 
-            // Update user dot marker
+            // Accuracy circle — center is kept in sync every frame by animateFrame
             const position = { lat: rawCoords[1], lng: rawCoords[0] };
-            if (!userMarkerRef.current) {
-              userMarkerRef.current = new google.maps.Marker({
-                map,
-                position,
-                zIndex: 8,
-                icon: {
-                  path: google.maps.SymbolPath.CIRCLE,
-                  scale: 8,
-                  fillColor: '#1a73e8',
-                  fillOpacity: 1,
-                  strokeColor: '#ffffff',
-                  strokeWeight: 2.5,
-                },
-              });
-            } else {
-              userMarkerRef.current.setPosition(position);
-            }
-
-            // Update accuracy circle
             if (!accuracyCircleRef.current) {
               accuracyCircleRef.current = new google.maps.Circle({
                 map,
                 center: position,
                 radius: Math.max(location.accuracy, 20),
                 fillColor: '#1a73e8',
-                fillOpacity: 0.15,
+                fillOpacity: 0.12,
                 strokeColor: '#1a73e8',
-                strokeOpacity: 0.4,
+                strokeOpacity: 0.35,
                 strokeWeight: 1,
                 zIndex: 7,
               });
             } else {
-              accuracyCircleRef.current.setCenter(position);
               accuracyCircleRef.current.setRadius(Math.max(location.accuracy, 20));
             }
-
-            // Heading calculation
-            let newHeading: number | null = null;
-            if (location.heading != null && !isNaN(location.heading) && location.heading >= 0) {
-              newHeading = location.heading;
-            }
-            if (newHeading === null && prev !== null) {
-              const dist = haversineDistance(prev, rawCoords);
-              if (dist >= MIN_MOVEMENT_FOR_BEARING) {
-                newHeading = calculateBearing(prev, rawCoords);
-              }
-            }
-
-            if (newHeading !== null) {
-              currentHeadingRef.current = smoothHeading(currentHeadingRef.current, newHeading, HEADING_SMOOTH_ALPHA);
-              cameraHeadingRef.current = smoothHeading(cameraHeadingRef.current, newHeading, CAMERA_BEARING_ALPHA);
-            }
-
-            updateArrowMarker(rawCoords, currentHeadingRef.current);
-
-            if (isSignificantMove) {
-              smoothedPositionRef.current = smoothPosition(smoothedPositionRef.current, rawCoords, 0.4);
-            }
-
-            const cameraCoords = smoothedPositionRef.current ?? rawCoords;
 
             // Off-route detection
             if (activeRouteGeometryRef.current && activeRouteGeometryRef.current.length > 0) {
@@ -553,19 +590,14 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
               }
             }
 
-            // Camera follow
-            if (followModeRef.current) {
-              if (isSignificantMove || !smoothedPositionRef.current) {
-                applyFollowMode(cameraCoords, cameraHeadingRef.current);
-              }
-            } else if (!hasInitialLocationRef.current) {
-              hasInitialLocationRef.current = true;
-              map.panTo({ lat: rawCoords[1], lng: rawCoords[0] });
-              map.setZoom(14);
-            }
-
+            // First-ever fix: if we're not already following, center on it once
+            // so the user immediately sees themselves on the map.
             if (!hasInitialLocationRef.current) {
               hasInitialLocationRef.current = true;
+              if (!followModeRef.current) {
+                map.panTo(position);
+                map.setZoom(14);
+              }
             }
           },
           (error) => {
@@ -584,18 +616,17 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       return () => {
         cleanedUp = true;
         clearWatch(watchIdRef.current);
-        if (cameraRafRef.current !== null) {
-          cancelAnimationFrame(cameraRafRef.current);
-          cameraRafRef.current = null;
-        }
         if (zoomTimeoutRef.current) {
           clearTimeout(zoomTimeoutRef.current);
           zoomTimeoutRef.current = null;
         }
+        if (arrowIconUrlRef.current) {
+          URL.revokeObjectURL(arrowIconUrlRef.current);
+          arrowIconUrlRef.current = null;
+        }
         // Clean up markers
         destinationMarkerRef.current?.setMap(null);
         pinMarkerRef.current?.setMap(null);
-        userMarkerRef.current?.setMap(null);
         userArrowMarkerRef.current?.setMap(null);
         accuracyCircleRef.current?.setMap(null);
         trafficLayerRef.current?.setMap(null);
@@ -610,6 +641,18 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Continuous position/heading interpolation loop — runs for the lifetime
+    // of the component, independent of the map-init effect above.
+    useEffect(() => {
+      animationFrameRef.current = requestAnimationFrame(animateFrame);
+      return () => {
+        if (animationFrameRef.current !== null) {
+          cancelAnimationFrame(animationFrameRef.current);
+          animationFrameRef.current = null;
+        }
+      };
+    }, [animateFrame]);
 
     useImperativeHandle(
       ref,
@@ -754,28 +797,14 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           }
         },
 
+        // Places/updates the same red arrow marker used by live GPS tracking —
+        // used for the one-off "locate me" fallback fix before watchPosition
+        // has produced its own reading yet.
         setUserMarker(coords: [number, number] | null) {
-          if (!mapRef.current || !isMapReadyRef.current) return;
-          if (coords) {
-            const position = { lat: coords[1], lng: coords[0] };
-            if (!userMarkerRef.current) {
-              userMarkerRef.current = new google.maps.Marker({
-                map: mapRef.current,
-                position,
-                zIndex: 8,
-                icon: {
-                  path: google.maps.SymbolPath.CIRCLE,
-                  scale: 8,
-                  fillColor: '#1a73e8',
-                  fillOpacity: 1,
-                  strokeColor: '#ffffff',
-                  strokeWeight: 2.5,
-                },
-              });
-            } else {
-              userMarkerRef.current.setPosition(position);
-            }
-          }
+          if (!coords) return;
+          userLocationRef.current = coords;
+          renderedPositionRef.current = coords;
+          updateArrowMarker(coords, currentHeadingRef.current);
         },
 
         zoomIn() {
@@ -791,7 +820,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         locateUser() {
           if (!mapRef.current) return;
           if (userLocationRef.current) {
-            const coords = smoothedPositionRef.current ?? userLocationRef.current;
+            const coords = renderedPositionRef.current ?? userLocationRef.current;
             mapRef.current.panTo({ lat: coords[1], lng: coords[0] });
             mapRef.current.setZoom(NAV_ZOOM);
           } else if (navigator.geolocation) {
@@ -799,7 +828,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
               (pos) => {
                 const coords: [number, number] = [pos.coords.longitude, pos.coords.latitude];
                 userLocationRef.current = coords;
-                smoothedPositionRef.current = coords;
+                renderedPositionRef.current = coords;
                 if (mapRef.current) {
                   mapRef.current.panTo({ lat: coords[1], lng: coords[0] });
                   mapRef.current.setZoom(NAV_ZOOM);
@@ -814,7 +843,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         locateUserAt(coords: [number, number]) {
           if (!mapRef.current) return;
           userLocationRef.current = coords;
-          smoothedPositionRef.current = coords;
+          renderedPositionRef.current = coords;
           mapRef.current.panTo({ lat: coords[1], lng: coords[0] });
           mapRef.current.setZoom(NAV_ZOOM);
         },
@@ -823,7 +852,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           applyMapStyleToMap(style);
         },
       }),
-      [applyMapStyleToMap]
+      [applyMapStyleToMap, updateArrowMarker]
     );
 
     return <div ref={containerRef} className="map-container" />;
