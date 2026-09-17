@@ -170,6 +170,10 @@ export default function NavigationMapClient() {
   const [mapStyle, setMapStyle] = useState<MapStyle>('dark');
   const [followMode, setFollowMode] = useState(false);
   const [navigationActive, setNavigationActive] = useState(false);
+  // Compass view mode (top-right button): 'headingUp' rotates the map to
+  // match the vehicle's heading (only visually rotates on a vector map —
+  // see USE_VECTOR_MAP in MapCanvas); 'northUp' keeps the camera fixed at 0.
+  const [mapViewMode, setMapViewMode] = useState<'northUp' | 'headingUp'>('headingUp');
   const [trafficEnabled, setTrafficEnabled] = useState(false);
   // Tap-to-navigate state
   const [pinDestination, setPinDestination] = useState<PinDestination | null>(null);
@@ -751,10 +755,20 @@ export default function NavigationMapClient() {
     );
   }, []);
 
+  // Tap the compass: if we're not currently following, this just recenters
+  // and resumes follow (existing behavior). If we're ALREADY following, the
+  // tap instead cycles the North-Up/Heading-Up view mode — the standard
+  // "tap once to recenter, tap again to toggle rotation lock" pattern used
+  // by Google Maps/Waze, and what the compass button visually communicates
+  // via its N label / arrow icon.
   const handleRecenter = useCallback(() => {
+    if (followMode) {
+      setMapViewMode((mode) => (mode === 'northUp' ? 'headingUp' : 'northUp'));
+      return;
+    }
     setFollowMode(true);
     if (mapRef.current) mapRef.current.locateUser();
-  }, []);
+  }, [followMode]);
 
   const handleDismissError = useCallback(() => {
     setErrorType(null);
@@ -798,6 +812,7 @@ export default function NavigationMapClient() {
           onZoomChange={handleZoomChange}
           followMode={followMode}
           navigationMode={navigationActive}
+          mapViewMode={mapViewMode}
           onFollowDisabled={handleFollowDisabled}
           onMapTap={handleMapTap}
           onOffRoute={handleOffRoute}
@@ -821,6 +836,7 @@ export default function NavigationMapClient() {
               onRecenter={handleRecenter}
               t={t}
               followMode={followMode}
+              mapViewMode={mapViewMode}
             />
           </div>
         </div>

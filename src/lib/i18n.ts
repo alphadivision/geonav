@@ -66,6 +66,7 @@ export interface Translations {
   offRoute: string;
   // Recenter / compass button
   recenter: string;
+  northUp: string;
   // Settings / help
   settings: string;
   help: string;
@@ -142,6 +143,7 @@ export const translations: Record<Language, Translations> = {
     eta: 'ჩასვლა',
     offRoute: 'მარშრუტის ხელახლა გამოთვლა',
     recenter: 'ცენტრში დაბრუნება',
+    northUp: 'ჩრდილოეთი ზემოთ',
     settings: 'პარამეტრები',
     help: 'დახმარება',
     helpText: 'მოძებნეთ მისამართი ზემოთ და დააჭირეთ მარშრუტს ნავიგაციის დასაწყებად. გამოიყენეთ ღილაკები ეკრანის კიდეებზე რუკის მართვისთვის.',
@@ -213,6 +215,7 @@ export const translations: Record<Language, Translations> = {
     eta: 'ETA',
     offRoute: 'Recalculate route',
     recenter: 'Recenter',
+    northUp: 'North Up',
     settings: 'Settings',
     help: 'Help',
     helpText: 'Search an address above and tap a route to start navigating. Use the buttons on the edges of the screen to control the map.',

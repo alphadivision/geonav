@@ -55,11 +55,14 @@ const TESLA_FRAME_INTERVAL_MS = 1000 / 24;
 const OFF_ROUTE_THRESHOLD = 80;
 const OFF_ROUTE_CHECK_INTERVAL = 5000;
 
-// Route progress trimming: only meaningful during active navigation, and
-// only needs to look right, not be pixel-perfect every frame — recomputing
-// the closest point on a multi-hundred-vertex polyline every animation frame
-// would be pure waste. Once a second is plenty to look smooth to the eye.
-const ROUTE_TRIM_INTERVAL_MS = 1000;
+// Route progress trimming ("Pac-Man" consumption of the traveled route):
+// the actual redraw (setPath on the polyline pool) is throttled to this
+// interval rather than every frame — repainting the same polylines 60x/sec
+// would be pure waste. 200ms (5x/sec) is frequent enough to read as smooth,
+// continuous consumption rather than visible chunky jumps, while the vehicle
+// position itself (see animateFrame) is still snapped/eased every frame
+// regardless of this throttle.
+const ROUTE_TRIM_INTERVAL_MS = 200;
 
 // Google Maps map type IDs mapped to our MapStyle keys
 const GOOGLE_MAP_TYPE: Record<MapStyle, string> = {
@@ -203,7 +206,15 @@ function createArrowOverlayClass() {
       this.arrowEl = arrowEl;
       this.applyHeading();
 
-      this.getPanes()?.overlayLayer.appendChild(container);
+      // IMPORTANT: markerLayer, not overlayLayer. Route polylines render in
+      // overlayLayer; Google's own documented pane stacking puts markerLayer
+      // above it unconditionally. Using the same pane as the route (as this
+      // used to) made the arrow's stacking depend on fragile DOM-append
+      // ordering relative to the route's own canvas/SVG repaints — which is
+      // exactly why the vehicle cursor could end up rendered underneath the
+      // route line. markerLayer guarantees it's always on top, the same way
+      // a native google.maps.Marker (used for destination/pin) already is.
+      this.getPanes()?.markerLayer.appendChild(container);
     }
 
     draw() {
@@ -320,16 +331,14 @@ function pointToSegmentDistance(
   return haversineDistance(p, proj);
 }
 
-// Route progress: finds the point on `route` closest to `pos`, then returns
-// the route trimmed to start from there — dropping every vertex already
-// traveled. Used to make the polyline shrink from behind the vehicle as it
-// advances instead of leaving the whole traveled path drawn on the map.
-function trimRouteAtPosition(
+// Shared closest-point-on-polyline projection, used both to snap the
+// rendered vehicle position onto the route (closestPointOnRoute) and to trim
+// the traveled section off the route (trimRouteAtPosition) — one projection
+// implementation instead of two copies that could drift out of sync.
+function projectOntoRoute(
   route: Array<[number, number]>,
   pos: [number, number]
-): { path: Array<[number, number]>; consumedIdx: number } {
-  if (route.length < 2) return { path: route, consumedIdx: 0 };
-
+): { point: [number, number]; segIdx: number } {
   let bestDist = Infinity;
   let bestIdx = 0;
   let bestProj: [number, number] = route[0];
@@ -354,7 +363,32 @@ function trimRouteAtPosition(
     }
   }
 
-  return { path: [bestProj, ...route.slice(bestIdx + 1)], consumedIdx: bestIdx };
+  return { point: bestProj, segIdx: bestIdx };
+}
+
+// Snaps a raw (GPS-smoothed) position onto the active route's geometry —
+// the same "puck sits on the road" behavior as any turn-by-turn nav app.
+// Only meaningful while actively navigating a known route; callers fall
+// back to the raw position when there's no route to snap to.
+function closestPointOnRoute(
+  route: Array<[number, number]>,
+  pos: [number, number]
+): [number, number] {
+  if (route.length < 2) return route[0] ?? pos;
+  return projectOntoRoute(route, pos).point;
+}
+
+// Route progress: finds the point on `route` closest to `pos`, then returns
+// the route trimmed to start from there — dropping every vertex already
+// traveled. Used to make the polyline shrink from behind the vehicle as it
+// advances instead of leaving the whole traveled path drawn on the map.
+function trimRouteAtPosition(
+  route: Array<[number, number]>,
+  pos: [number, number]
+): { path: Array<[number, number]>; consumedIdx: number } {
+  if (route.length < 2) return { path: route, consumedIdx: 0 };
+  const { point, segIdx } = projectOntoRoute(route, pos);
+  return { path: [point, ...route.slice(segIdx + 1)], consumedIdx: segIdx };
 }
 
 // Re-expresses traffic segments (index ranges into a route's coordinate
@@ -439,6 +473,12 @@ interface MapCanvasProps {
    * renderer supports it) a tilted perspective. Only takes effect while
    * followMode is also true. */
   navigationMode?: boolean;
+  /** Compass view mode while following: 'northUp' keeps the camera heading
+   * at 0 (map fixed, arrow rotates freely); 'headingUp' eases the camera
+   * heading to match the vehicle's true heading (map rotates underneath a
+   * screen-fixed arrow — only visually rotates on a vector map, see
+   * USE_VECTOR_MAP). Defaults to 'headingUp' to preserve prior behavior. */
+  mapViewMode?: 'northUp' | 'headingUp';
 }
 
 export interface MapCanvasHandle {
@@ -495,6 +535,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       onMapTap,
       onOffRoute,
       navigationMode = false,
+      mapViewMode = 'headingUp',
     },
     ref
   ) => {
@@ -532,6 +573,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const currentStyleRef = useRef<MapStyle>(mapStyle);
     const followModeRef = useRef(followMode);
     const navigationModeRef = useRef(navigationMode);
+    const mapViewModeRef = useRef(mapViewMode);
     const onFollowDisabledRef = useRef(onFollowDisabled);
     const trafficEnabledRef = useRef(trafficEnabled);
     const onMapTapRef = useRef(onMapTap);
@@ -549,6 +591,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     // Keep refs in sync with props
     followModeRef.current = followMode;
     navigationModeRef.current = navigationMode;
+    mapViewModeRef.current = mapViewMode;
     onFollowDisabledRef.current = onFollowDisabled;
     trafficEnabledRef.current = trafficEnabled;
     onMapTapRef.current = onMapTap;
@@ -634,11 +677,46 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         const nextPosition = smoothPosition(current, target, POSITION_LERP_ALPHA);
         renderedPositionRef.current = nextPosition;
 
+        // While actively navigating a known route, the DISPLAYED position
+        // (arrow + camera center) is snapped onto the route geometry — GPS
+        // noise is first smoothed above, then any remaining perpendicular
+        // offset from the road is corrected here so the cursor visually
+        // sits on the route rather than beside it. The underlying
+        // renderedPositionRef trajectory above stays unsnapped so off-route
+        // detection and future interpolation keep tracking the real fix.
+        const hasActiveRoute = navigationModeRef.current && !!activeRouteGeometryRef.current && activeRouteGeometryRef.current.length > 1;
+        const displayPosition = hasActiveRoute
+          ? closestPointOnRoute(activeRouteGeometryRef.current!, nextPosition)
+          : nextPosition;
+
         const headingGap = Math.abs(angleDiff(currentHeadingRef.current, targetHeadingRef.current));
         currentHeadingRef.current = currentHeadingRef.current + angleDiff(currentHeadingRef.current, targetHeadingRef.current) * ARROW_HEADING_LERP_ALPHA;
-        cameraHeadingRef.current = cameraHeadingRef.current + angleDiff(cameraHeadingRef.current, targetHeadingRef.current) * CAMERA_BEARING_ALPHA;
 
-        updateArrowMarker(nextPosition, currentHeadingRef.current);
+        // Camera heading target depends on the compass view mode: North-Up
+        // keeps the camera fixed at 0 (map never rotates, arrow rotates
+        // freely); Heading-Up eases the camera toward the vehicle's true
+        // heading (map rotates underneath a screen-fixed arrow). angleDiff
+        // always takes the shortest circular path, so switching modes (or
+        // the heading crossing 0°/360°) animates smoothly, never a hard cut
+        // or a near-full-circle spin.
+        const cameraHeadingTarget = mapViewModeRef.current === 'northUp' ? 0 : targetHeadingRef.current;
+        cameraHeadingRef.current = cameraHeadingRef.current + angleDiff(cameraHeadingRef.current, cameraHeadingTarget) * CAMERA_BEARING_ALPHA;
+
+        // The arrow's ON-SCREEN rotation is relative to the camera's actual
+        // rotation, not the raw compass heading — but ONLY on a vector map,
+        // where moveCamera({heading}) really does rotate the map visually.
+        // On raster (no Map ID configured — see USE_VECTOR_MAP), the map
+        // never visually rotates regardless of mode, so the arrow must keep
+        // showing the true heading directly; making it screen-relative there
+        // would freeze the arrow while the (unrotated) map still shows the
+        // vehicle driving in a different direction. On a vector map this
+        // formula is what makes North-Up (camera heading ~0) show the arrow
+        // rotating freely, and Heading-Up (camera heading ~= true heading)
+        // show the arrow fixed pointing up while the map rotates under it.
+        const arrowScreenHeading = USE_VECTOR_MAP
+          ? angleDiff(cameraHeadingRef.current, currentHeadingRef.current)
+          : currentHeadingRef.current;
+        updateArrowMarker(displayPosition, arrowScreenHeading);
 
         if (followModeRef.current) {
           const navMode = navigationModeRef.current;
@@ -648,8 +726,8 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           // this is how we get the user/arrow to render lower on screen with
           // the road and destination visible ahead, like a real nav app.
           const center = navMode
-            ? destinationPoint(nextPosition, cameraHeadingRef.current, NAV_MODE_LOOKAHEAD_M)
-            : nextPosition;
+            ? destinationPoint(displayPosition, cameraHeadingRef.current, NAV_MODE_LOOKAHEAD_M)
+            : displayPosition;
           const tilt = navMode ? NAV_MODE_TILT : 0;
 
           const last = lastCameraStateRef.current;
@@ -667,27 +745,37 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           }
         }
 
-        // Route progress: trim the traveled section off the back of the
-        // route polyline as the vehicle advances, so only the remaining
-        // road ahead stays drawn. Only while actually navigating (not just
-        // previewing a calculated route), and throttled — this only needs
-        // to look right, not be recomputed 60x/sec.
-        if (navigationModeRef.current && activeRouteGeometryRef.current && activeRouteGeometryRef.current.length > 1) {
-          if (now - lastRouteTrimRef.current > ROUTE_TRIM_INTERVAL_MS) {
-            lastRouteTrimRef.current = now;
-            const { path: trimmed, consumedIdx } = trimRouteAtPosition(activeRouteGeometryRef.current, nextPosition);
-            if (trimmed.length !== activeRouteGeometryRef.current.length) {
-              activeRouteGeometryRef.current = trimmed;
-              activeRouteSegmentsRef.current = shiftTrafficSegments(activeRouteSegmentsRef.current, consumedIdx);
-              const path = trimmed.map(([lng, lat]) => ({ lat, lng }));
-              mainRouteCasingRef.current?.setPath(path);
-              renderRouteWithTraffic(mainRouteSegmentPolylinesRef.current, trimmed, activeRouteSegmentsRef.current);
-            }
+        // Route progress ("Pac-Man" consumption): trim the traveled section
+        // off the back of the route polyline as the vehicle advances, so
+        // only the remaining road ahead stays drawn — only while actually
+        // navigating, and throttled (ROUTE_TRIM_INTERVAL_MS) since redrawing
+        // the polyline pool every single frame would be wasted GPU work; the
+        // vehicle's own on-screen position above is still snapped every
+        // frame regardless, so the cursor itself never looks chunky even
+        // though the route redraw ticks a few times a second rather than 60.
+        if (hasActiveRoute && now - lastRouteTrimRef.current > ROUTE_TRIM_INTERVAL_MS) {
+          lastRouteTrimRef.current = now;
+          const { path: trimmed, consumedIdx } = trimRouteAtPosition(activeRouteGeometryRef.current!, nextPosition);
+          if (trimmed.length !== activeRouteGeometryRef.current!.length) {
+            activeRouteGeometryRef.current = trimmed;
+            activeRouteSegmentsRef.current = shiftTrafficSegments(activeRouteSegmentsRef.current, consumedIdx);
+            const path = trimmed.map(([lng, lat]) => ({ lat, lng }));
+            mainRouteCasingRef.current?.setPath(path);
+            renderRouteWithTraffic(mainRouteSegmentPolylinesRef.current, trimmed, activeRouteSegmentsRef.current);
           }
         }
 
         const posGap = haversineDistance(nextPosition, target);
-        settled = posGap < CONVERGED_POS_EPSILON_M && headingGap < CONVERGED_HEADING_EPSILON_DEG;
+        // Camera-heading convergence is checked separately from the arrow's
+        // own heading gap above: in North-Up mode they chase different
+        // targets (0 vs true heading), so relying only on the arrow's gap
+        // could report "settled" — and stop the animation loop — while the
+        // camera is still mid-rotation after a compass mode switch.
+        const cameraHeadingGap = Math.abs(angleDiff(cameraHeadingRef.current, cameraHeadingTarget));
+        settled =
+          posGap < CONVERGED_POS_EPSILON_M &&
+          headingGap < CONVERGED_HEADING_EPSILON_DEG &&
+          cameraHeadingGap < CONVERGED_HEADING_EPSILON_DEG;
       }
 
       if (settled) {
@@ -1040,9 +1128,13 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     // Re-engage the camera the instant follow/navigation mode turns on, even
     // if no new GPS fix has arrived yet (otherwise the camera would wait for
     // the next GPS tick, up to ~1s, before reacting to "Start Route"/Recenter).
+    // Also re-kicks on a North-Up/Heading-Up compass toggle — that changes
+    // cameraHeadingRef's target without any new GPS fix, so the interpolation
+    // loop needs waking up to actually animate the rotation instead of
+    // sitting settled until the next unrelated GPS tick.
     useEffect(() => {
       if (followMode) kickAnimationRef.current();
-    }, [followMode, navigationMode]);
+    }, [followMode, navigationMode, mapViewMode]);
 
     useImperativeHandle(
       ref,
