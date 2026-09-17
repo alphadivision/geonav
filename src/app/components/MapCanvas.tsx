@@ -55,14 +55,15 @@ const TESLA_FRAME_INTERVAL_MS = 1000 / 24;
 const OFF_ROUTE_THRESHOLD = 80;
 const OFF_ROUTE_CHECK_INTERVAL = 5000;
 
-// Route progress trimming ("Pac-Man" consumption of the traveled route):
-// the actual redraw (setPath on the polyline pool) is throttled to this
-// interval rather than every frame — repainting the same polylines 60x/sec
-// would be pure waste. 200ms (5x/sec) is frequent enough to read as smooth,
-// continuous consumption rather than visible chunky jumps, while the vehicle
-// position itself (see animateFrame) is still snapped/eased every frame
-// regardless of this throttle.
-const ROUTE_TRIM_INTERVAL_MS = 200;
+// Pin placement requires a press-and-hold of this length (a normal quick tap
+// no longer drops a pin) — see the mousedown/mouseup/dragstart handling in
+// the map-init effect below.
+const LONG_PRESS_DURATION_MS = 3500;
+// Same threshold already used elsewhere to tell a real drag from a
+// stationary click — reused here to cancel a pending long-press if the
+// pointer moves meaningfully before the hold completes.
+const LONG_PRESS_MOVE_CANCEL_PX = 8;
+
 
 // Google Maps map type IDs mapped to our MapStyle keys
 const GOOGLE_MAP_TYPE: Record<MapStyle, string> = {
@@ -332,9 +333,11 @@ function pointToSegmentDistance(
 }
 
 // Shared closest-point-on-polyline projection, used both to snap the
-// rendered vehicle position onto the route (closestPointOnRoute) and to trim
-// the traveled section off the route (trimRouteAtPosition) — one projection
-// implementation instead of two copies that could drift out of sync.
+// rendered vehicle position onto the route (closestPointOnRoute) and, in
+// animateFrame, to trim the traveled section off the route every frame —
+// one projection implementation instead of two copies that could drift out
+// of sync (and, since it's computed once and reused for both, no wasted
+// duplicate work for a feature that already needs it per frame).
 function projectOntoRoute(
   route: Array<[number, number]>,
   pos: [number, number]
@@ -378,22 +381,9 @@ function closestPointOnRoute(
   return projectOntoRoute(route, pos).point;
 }
 
-// Route progress: finds the point on `route` closest to `pos`, then returns
-// the route trimmed to start from there — dropping every vertex already
-// traveled. Used to make the polyline shrink from behind the vehicle as it
-// advances instead of leaving the whole traveled path drawn on the map.
-function trimRouteAtPosition(
-  route: Array<[number, number]>,
-  pos: [number, number]
-): { path: Array<[number, number]>; consumedIdx: number } {
-  if (route.length < 2) return { path: route, consumedIdx: 0 };
-  const { point, segIdx } = projectOntoRoute(route, pos);
-  return { path: [point, ...route.slice(segIdx + 1)], consumedIdx: segIdx };
-}
-
 // Re-expresses traffic segments (index ranges into a route's coordinate
-// array) after trimRouteAtPosition has dropped `consumedIdx` original points
-// off the front and replaced them with a single projected point at index 0.
+// array) after the vehicle's route projection has dropped `consumedIdx`
+// original points off the front (see animateFrame's per-frame trimming).
 // Segments fully behind the new index 0 are dropped; the segment straddling
 // the cut is clamped to start at the new index 0.
 function shiftTrafficSegments(
@@ -581,12 +571,12 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const activeRouteGeometryRef = useRef<Array<[number, number]> | null>(null);
     const activeRouteSegmentsRef = useRef<TrafficSegment[] | null>(null);
     const lastOffRouteCheckRef = useRef<number>(0);
-    const lastRouteTrimRef = useRef<number>(0);
     const lastPositionWriteRef = useRef<number>(0);
     const isDraggingRef = useRef(false);
     const isZoomingRef = useRef(false);
     const zoomTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
+    const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Keep refs in sync with props
     followModeRef.current = followMode;
@@ -684,10 +674,15 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         // sits on the route rather than beside it. The underlying
         // renderedPositionRef trajectory above stays unsnapped so off-route
         // detection and future interpolation keep tracking the real fix.
+        //
+        // This projection is computed ONCE per frame and reused below for
+        // route trimming too, so the cursor's position and the route
+        // polyline's trimmed start point are always derived from the exact
+        // same value in the exact same frame — they cannot visually diverge
+        // into a "tail" behind the cursor.
         const hasActiveRoute = navigationModeRef.current && !!activeRouteGeometryRef.current && activeRouteGeometryRef.current.length > 1;
-        const displayPosition = hasActiveRoute
-          ? closestPointOnRoute(activeRouteGeometryRef.current!, nextPosition)
-          : nextPosition;
+        const routeProjection = hasActiveRoute ? projectOntoRoute(activeRouteGeometryRef.current!, nextPosition) : null;
+        const displayPosition = routeProjection ? routeProjection.point : nextPosition;
 
         const headingGap = Math.abs(angleDiff(currentHeadingRef.current, targetHeadingRef.current));
         currentHeadingRef.current = currentHeadingRef.current + angleDiff(currentHeadingRef.current, targetHeadingRef.current) * ARROW_HEADING_LERP_ALPHA;
@@ -747,22 +742,22 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
         // Route progress ("Pac-Man" consumption): trim the traveled section
         // off the back of the route polyline as the vehicle advances, so
-        // only the remaining road ahead stays drawn — only while actually
-        // navigating, and throttled (ROUTE_TRIM_INTERVAL_MS) since redrawing
-        // the polyline pool every single frame would be wasted GPU work; the
-        // vehicle's own on-screen position above is still snapped every
-        // frame regardless, so the cursor itself never looks chunky even
-        // though the route redraw ticks a few times a second rather than 60.
-        if (hasActiveRoute && now - lastRouteTrimRef.current > ROUTE_TRIM_INTERVAL_MS) {
-          lastRouteTrimRef.current = now;
-          const { path: trimmed, consumedIdx } = trimRouteAtPosition(activeRouteGeometryRef.current!, nextPosition);
-          if (trimmed.length !== activeRouteGeometryRef.current!.length) {
-            activeRouteGeometryRef.current = trimmed;
-            activeRouteSegmentsRef.current = shiftTrafficSegments(activeRouteSegmentsRef.current, consumedIdx);
-            const path = trimmed.map(([lng, lat]) => ({ lat, lng }));
-            mainRouteCasingRef.current?.setPath(path);
-            renderRouteWithTraffic(mainRouteSegmentPolylinesRef.current, trimmed, activeRouteSegmentsRef.current);
-          }
+        // only the remaining road ahead stays drawn. This runs every single
+        // frame (no timer throttle, no "did the point count change" gate) —
+        // both of those previously let the polyline's start point sit still
+        // for up to ~200ms, or for the vehicle's entire traversal of a
+        // single route segment, while the cursor kept moving every frame,
+        // which is exactly what produced the visible blue "tail" behind it.
+        // Reusing routeProjection (computed above for the cursor) means this
+        // costs nothing extra to project — just an array slice + setPath.
+        if (routeProjection) {
+          const { point, segIdx } = routeProjection;
+          const trimmed = [point, ...activeRouteGeometryRef.current!.slice(segIdx + 1)];
+          activeRouteGeometryRef.current = trimmed;
+          activeRouteSegmentsRef.current = shiftTrafficSegments(activeRouteSegmentsRef.current, segIdx);
+          const path = trimmed.map(([lng, lat]) => ({ lat, lng }));
+          mainRouteCasingRef.current?.setPath(path);
+          renderRouteWithTraffic(mainRouteSegmentPolylinesRef.current, trimmed, activeRouteSegmentsRef.current);
         }
 
         const posGap = haversineDistance(nextPosition, target);
@@ -937,8 +932,14 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           }, 300);
         });
 
-        // Drag detection — disable follow mode on manual pan
+        // Drag detection — disable follow mode on manual pan, and cancel any
+        // pending long-press pin placement (real dragging means the user is
+        // panning, not holding in place to drop a pin).
         map.addListener('dragstart', () => {
+          if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
+          }
           if (!isZoomingRef.current) {
             isDraggingRef.current = true;
             if (followModeRef.current) {
@@ -953,36 +954,60 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           }, 100);
         });
 
-        // Tap-to-navigate
+        // Pin placement is a press-and-hold (LONG_PRESS_DURATION_MS), not a
+        // quick tap: mousedown starts a timer capturing the press location;
+        // mouseup before the timer fires cancels it (no pin); moving the
+        // pointer more than LONG_PRESS_MOVE_CANCEL_PX, or an actual map drag
+        // starting, also cancels it. Only if the timer runs all the way
+        // down uninterrupted does it call onMapTap — a plain quick click no
+        // longer creates a pin at all.
         map.addListener('mousedown', (e: google.maps.MapMouseEvent) => {
-          if (e.domEvent) {
-            const domE = e.domEvent as MouseEvent | TouchEvent;
+          if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
+          }
+
+          const domE = e.domEvent as (MouseEvent | TouchEvent) | undefined;
+          if (domE) {
             const pos = 'touches' in domE
               ? { x: (domE as TouchEvent).touches[0].clientX, y: (domE as TouchEvent).touches[0].clientY }
               : { x: (domE as MouseEvent).clientX, y: (domE as MouseEvent).clientY };
             dragStartPosRef.current = pos;
+
+            const target = domE.target as HTMLElement;
+            if (target && target.closest('[data-no-map-tap]')) return;
+          }
+
+          if (!onMapTapRef.current || !e.latLng) return;
+          const coords: [number, number] = [e.latLng.lng(), e.latLng.lat()];
+          longPressTimerRef.current = setTimeout(() => {
+            longPressTimerRef.current = null;
+            onMapTapRef.current?.(coords);
+          }, LONG_PRESS_DURATION_MS);
+        });
+
+        map.addListener('mousemove', (e: google.maps.MapMouseEvent) => {
+          if (!longPressTimerRef.current) return;
+          const domE = e.domEvent as (MouseEvent | TouchEvent) | undefined;
+          const start = dragStartPosRef.current;
+          if (!domE || !start) return;
+          const point = 'touches' in domE
+            ? (domE as TouchEvent).touches[0]
+            : (domE as MouseEvent);
+          if (!point) return;
+          const dx = Math.abs(point.clientX - start.x);
+          const dy = Math.abs(point.clientY - start.y);
+          if (dx > LONG_PRESS_MOVE_CANCEL_PX || dy > LONG_PRESS_MOVE_CANCEL_PX) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
           }
         });
 
-        map.addListener('click', (e: google.maps.MapMouseEvent) => {
-          if (!onMapTapRef.current || !e.latLng) return;
-          if (isDraggingRef.current) return;
-
-          const domE = e.domEvent as MouseEvent | undefined;
-          if (domE) {
-            const target = domE.target as HTMLElement;
-            if (target && target.closest('[data-no-map-tap]')) return;
-
-            const start = dragStartPosRef.current;
-            if (start) {
-              const dx = Math.abs(domE.clientX - start.x);
-              const dy = Math.abs(domE.clientY - start.y);
-              if (dx > 8 || dy > 8) return;
-            }
+        map.addListener('mouseup', () => {
+          if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
           }
-
-          const coords: [number, number] = [e.latLng.lng(), e.latLng.lat()];
-          onMapTapRef.current(coords);
         });
 
         isMapReadyRef.current = true;
@@ -1079,6 +1104,10 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         if (zoomTimeoutRef.current) {
           clearTimeout(zoomTimeoutRef.current);
           zoomTimeoutRef.current = null;
+        }
+        if (longPressTimerRef.current) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
         }
         // Clean up markers
         destinationMarkerRef.current?.setMap(null);
