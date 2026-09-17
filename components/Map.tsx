@@ -579,6 +579,13 @@ export const Map = forwardRef<MapRef, MapProps>(function Map(
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
+    // mapbox-gl throws synchronously when the access token is missing, which
+    // crashes the whole client tree. Bail out gracefully instead.
+    if (!MAPBOX_TOKEN) {
+      console.error("[TeslaNav] Missing NEXT_PUBLIC_MAPBOX_TOKEN — map cannot be initialized.");
+      return;
+    }
+
     mapboxgl.accessToken = MAPBOX_TOKEN;
 
     // Determine initial style
