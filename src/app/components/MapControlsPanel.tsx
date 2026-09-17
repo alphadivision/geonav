@@ -75,6 +75,7 @@ export default function MapControlsPanel({
           'text-foreground hover:text-primary hover:bg-muted/60',
           'shadow-xl shadow-black/40',
           'transition-all duration-150 active:scale-95',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
           open ? 'text-primary bg-muted/60' : '',
         ].join(' ')}
         aria-label={t.mapControls}
@@ -107,6 +108,7 @@ export default function MapControlsPanel({
                 onClick={() => onLanguageChange('ka')}
                 className={[
                   'flex-1 py-2 text-xs font-semibold transition-colors',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-inset',
                   language === 'ka' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5',
                 ].join(' ')}
                 aria-pressed={language === 'ka'}
@@ -117,6 +119,7 @@ export default function MapControlsPanel({
                 onClick={() => onLanguageChange('en')}
                 className={[
                   'flex-1 py-2 text-xs font-semibold transition-colors',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-inset',
                   language === 'en' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-white/5',
                 ].join(' ')}
                 aria-pressed={language === 'en'}
@@ -139,6 +142,7 @@ export default function MapControlsPanel({
                     className={[
                       'flex flex-col items-center justify-center gap-0.5 rounded-lg py-2',
                       'transition-colors',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
                       isActive ? 'bg-primary/15 text-primary' : 'hover:bg-white/5 text-muted-foreground',
                     ].join(' ')}
                     aria-pressed={isActive}
@@ -155,7 +159,7 @@ export default function MapControlsPanel({
           <div className="px-4 py-3">
             <button
               onClick={onTrafficToggle}
-              className="w-full flex items-center justify-between"
+              className="w-full flex items-center justify-between rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
               aria-pressed={trafficEnabled}
             >
               <span className="flex items-center gap-2 text-sm font-medium text-foreground">

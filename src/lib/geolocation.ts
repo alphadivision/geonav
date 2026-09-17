@@ -57,17 +57,22 @@ export function watchPosition(
     const { latitude, longitude, accuracy, heading, speed, altitudeAccuracy } = position.coords;
     const timestamp = position.timestamp;
 
-    console.log(
-      '[GeoNav GPS]',
-      `lat=${latitude.toFixed(7)}`,
-      `lng=${longitude.toFixed(7)}`,
-      `accuracy=${accuracy != null ? accuracy.toFixed(1) + 'm' : 'n/a'}`,
-      `heading=${heading != null ? heading.toFixed(1) + '°' : 'n/a'}`,
-      `speed=${speed != null ? speed.toFixed(2) + 'm/s' : 'n/a'}`,
-      `altAccuracy=${altitudeAccuracy != null ? altitudeAccuracy.toFixed(1) + 'm' : 'n/a'}`,
-      `age=${((Date.now() - timestamp) / 1000).toFixed(1)}s ago`,
-      `ts=${new Date(timestamp).toISOString()}`
-    );
+    // Verbose per-fix logging is dev-only — this fires on every single GPS
+    // update for the entire drive, and the string formatting/Date work below
+    // is pure overhead in production (especially on constrained hardware).
+    if (process.env.NODE_ENV === 'development') {
+      console.log(
+        '[GeoNav GPS]',
+        `lat=${latitude.toFixed(7)}`,
+        `lng=${longitude.toFixed(7)}`,
+        `accuracy=${accuracy != null ? accuracy.toFixed(1) + 'm' : 'n/a'}`,
+        `heading=${heading != null ? heading.toFixed(1) + '°' : 'n/a'}`,
+        `speed=${speed != null ? speed.toFixed(2) + 'm/s' : 'n/a'}`,
+        `altAccuracy=${altitudeAccuracy != null ? altitudeAccuracy.toFixed(1) + 'm' : 'n/a'}`,
+        `age=${((Date.now() - timestamp) / 1000).toFixed(1)}s ago`,
+        `ts=${new Date(timestamp).toISOString()}`
+      );
+    }
 
     if (accuracy != null && accuracy > MAX_ACCEPTABLE_ACCURACY) {
       console.warn(

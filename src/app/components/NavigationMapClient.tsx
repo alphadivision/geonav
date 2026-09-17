@@ -137,11 +137,9 @@ export default function NavigationMapClient() {
   const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
   const [routeAlternatives, setRouteAlternatives] = useState<RouteAlternative[]>([]);
   const [selectedRouteIndex, setSelectedRouteIndex] = useState<number>(0);
-  const [userLocation, setUserLocation] = useState<UserLocation | null>(null);
   const [errorType, setErrorType] = useState<ErrorType>(null);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isMapReady, setIsMapReady] = useState(false);
-  const [mapZoom, setMapZoom] = useState(12);
   const [mapStyle, setMapStyle] = useState<MapStyle>('dark');
   const [followMode, setFollowMode] = useState(false);
   const [navigationActive, setNavigationActive] = useState(false);
@@ -152,11 +150,16 @@ export default function NavigationMapClient() {
   const [showReplacePrompt, setShowReplacePrompt] = useState<[number, number] | null>(null);
 
   const mapRef = useRef<MapCanvasHandle | null>(null);
+  // userLocation/mapZoom are updated on every GPS/zoom tick — kept as plain
+  // refs (not React state) since nothing in this component's render output
+  // depends on their live value, only callbacks that read the latest value
+  // on demand. Using useState here would re-render the whole component tree
+  // on every GPS fix for no visual benefit.
   const userLocationRef = useRef<UserLocation | null>(null);
+  const mapZoomRef = useRef(12);
   const routeAlternativesRef = useRef<RouteAlternative[]>([]);
 
   // Keep refs in sync
-  userLocationRef.current = userLocation;
   routeAlternativesRef.current = routeAlternatives;
 
   // Initialize language, map style, and traffic from localStorage
@@ -181,11 +184,14 @@ export default function NavigationMapClient() {
     setIsMapReady(true);
   }, []);
 
+  // MapCanvas's own GPS watcher already tracks the raw fix and drives the
+  // arrow marker/camera through its internal interpolation loop — calling
+  // setUserMarker() here too would just re-snap that interpolation to the raw
+  // position on every single GPS tick (fighting the smoothing) for no
+  // benefit, so this only needs to record the latest fix for callbacks that
+  // read it on demand (route calculation, off-route recalculation, etc.).
   const handleUserLocationUpdate = useCallback((location: UserLocation) => {
-    setUserLocation(location);
-    if (mapRef.current) {
-      mapRef.current.setUserMarker([location.lng, location.lat]);
-    }
+    userLocationRef.current = location;
   }, []);
 
   const handleLocationError = useCallback(
@@ -637,12 +643,19 @@ export default function NavigationMapClient() {
 
   const handleZoomIn = useCallback(() => {
     if (mapRef.current) mapRef.current.zoomIn();
-    setMapZoom((z) => Math.min(z + 1, 20));
+    mapZoomRef.current = Math.min(mapZoomRef.current + 1, 20);
   }, []);
 
   const handleZoomOut = useCallback(() => {
     if (mapRef.current) mapRef.current.zoomOut();
-    setMapZoom((z) => Math.max(z - 1, 1));
+    mapZoomRef.current = Math.max(mapZoomRef.current - 1, 1);
+  }, []);
+
+  // Zoom level isn't used anywhere in this component's render output — only
+  // recorded for callbacks that might want the latest value on demand — so a
+  // ref avoids re-rendering the whole tree on every zoom_changed event.
+  const handleZoomChange = useCallback((zoom: number) => {
+    mapZoomRef.current = zoom;
   }, []);
 
   // Location button: use the already-tracked watchPosition location immediately,
@@ -672,8 +685,7 @@ export default function NavigationMapClient() {
 
     const applyPosition = (position: GeolocationPosition) => {
       const { latitude, longitude, accuracy, heading } = position.coords;
-      const freshLocation = { lat: latitude, lng: longitude, accuracy: accuracy ?? undefined, heading: heading ?? undefined };
-      setUserLocation(freshLocation);
+      userLocationRef.current = { lat: latitude, lng: longitude, accuracy: accuracy ?? undefined, heading: heading ?? undefined };
       if (mapRef.current) {
         mapRef.current.setUserMarker([longitude, latitude]);
         mapRef.current.locateUserAt([longitude, latitude]);
@@ -745,7 +757,7 @@ export default function NavigationMapClient() {
           onMapReady={handleMapReady}
           onUserLocationUpdate={handleUserLocationUpdate}
           onLocationError={handleLocationError}
-          onZoomChange={setMapZoom}
+          onZoomChange={handleZoomChange}
           followMode={followMode}
           navigationMode={navigationActive}
           onFollowDisabled={handleFollowDisabled}

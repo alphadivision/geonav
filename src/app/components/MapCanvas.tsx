@@ -17,6 +17,7 @@ import {
   destinationPoint,
 } from '@/lib/mapbox';
 import { watchPosition, clearWatch } from '@/lib/geolocation';
+import { isTeslaBrowser } from '@/lib/device';
 
 /// <reference types="@types/google.maps" />
 declare const google: typeof globalThis.google;
@@ -36,6 +37,21 @@ const CAMERA_BEARING_ALPHA = 0.12; // camera rotation easing (slightly slower, l
 const ARROW_ICON_UPDATE_THRESHOLD_DEG = 1.5; // skip SVG/blob regen for imperceptible heading deltas
 const CAMERA_MOVE_THRESHOLD_M = 0.1; // skip redundant moveCamera calls once converged
 const CAMERA_HEADING_THRESHOLD_DEG = 0.1;
+
+// Once position + heading are this close to their targets, the interpolation
+// loop stops requesting new animation frames entirely (rather than spinning
+// at the display refresh rate forever) — it's woken back up (see kickAnimation)
+// the moment a new GPS/heading target actually differs. This is the main
+// lever for idle CPU/GPU cost: a car parked with a converged fix burns zero
+// rAF cycles instead of running interpolation math 60x/sec indefinitely.
+const CONVERGED_POS_EPSILON_M = 0.05;
+const CONVERGED_HEADING_EPSILON_DEG = 0.05;
+
+// Tesla's in-car browser has meaningfully less CPU/GPU headroom than a
+// desktop — 24fps camera/marker interpolation is still visually smooth for
+// panning/rotation but roughly halves the JS work per second versus 60fps.
+// Desktop/mobile are untouched (interval 0 = no throttling).
+const TESLA_FRAME_INTERVAL_MS = 1000 / 24;
 
 const OFF_ROUTE_THRESHOLD = 80;
 const OFF_ROUTE_CHECK_INTERVAL = 5000;
@@ -237,6 +253,9 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const currentHeadingRef = useRef<number>(0);
     const cameraHeadingRef = useRef<number>(0);
     const animationFrameRef = useRef<number | null>(null);
+    const isAnimatingRef = useRef(false);
+    const lastFrameTimeRef = useRef(0);
+    const isTeslaRef = useRef(false);
     const lastCameraStateRef = useRef<{ lat: number; lng: number; heading: number; zoom: number } | null>(null);
     const currentStyleRef = useRef<MapStyle>(mapStyle);
     const followModeRef = useRef(followMode);
@@ -337,19 +356,37 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       }
     }, [setArrowIcon]);
 
-    // Continuous per-frame loop: eases the rendered position/heading toward the
-    // latest real GPS fix (userLocationRef / targetHeadingRef), so the marker
-    // and — when follow mode is active — the camera glide smoothly instead of
-    // jumping once per GPS update. Runs for the lifetime of the component.
-    const animateFrame = useCallback(() => {
+    // Per-frame loop: eases the rendered position/heading toward the latest
+    // real GPS fix (userLocationRef / targetHeadingRef), so the marker and —
+    // when follow mode is active — the camera glide smoothly instead of
+    // jumping once per GPS update.
+    //
+    // Unlike a naive rAF loop, this does NOT run forever: once position and
+    // heading have converged to their targets it simply stops requesting new
+    // frames (isAnimatingRef -> false), so a parked/stationary session costs
+    // zero CPU between GPS fixes instead of spinning at the display refresh
+    // rate indefinitely. kickAnimation() (below) wakes it back up whenever a
+    // new target actually differs. On Tesla's in-car browser, the real
+    // interpolation work is additionally throttled to ~24fps — still smooth
+    // for panning/rotation, at roughly half the CPU/GPU cost of 60fps.
+    const animateFrame = useCallback((timestamp?: number) => {
+      const now = timestamp ?? performance.now();
+      if (isTeslaRef.current && now - lastFrameTimeRef.current < TESLA_FRAME_INTERVAL_MS) {
+        animationFrameRef.current = requestAnimationFrame(animateFrame);
+        return;
+      }
+      lastFrameTimeRef.current = now;
+
       const map = mapRef.current;
       const target = userLocationRef.current;
+      let settled = true;
 
       if (map && isMapReadyRef.current && target) {
         const current = renderedPositionRef.current ?? target;
         const nextPosition = smoothPosition(current, target, POSITION_LERP_ALPHA);
         renderedPositionRef.current = nextPosition;
 
+        const headingGap = Math.abs(angleDiff(currentHeadingRef.current, targetHeadingRef.current));
         currentHeadingRef.current = currentHeadingRef.current + angleDiff(currentHeadingRef.current, targetHeadingRef.current) * ARROW_HEADING_LERP_ALPHA;
         cameraHeadingRef.current = cameraHeadingRef.current + angleDiff(cameraHeadingRef.current, targetHeadingRef.current) * CAMERA_BEARING_ALPHA;
 
@@ -382,10 +419,30 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
             lastCameraStateRef.current = { lat: center[1], lng: center[0], heading: cameraHeadingRef.current, zoom };
           }
         }
+
+        const posGap = haversineDistance(nextPosition, target);
+        settled = posGap < CONVERGED_POS_EPSILON_M && headingGap < CONVERGED_HEADING_EPSILON_DEG;
       }
 
-      animationFrameRef.current = requestAnimationFrame(animateFrame);
+      if (settled) {
+        isAnimatingRef.current = false;
+        animationFrameRef.current = null;
+      } else {
+        animationFrameRef.current = requestAnimationFrame(animateFrame);
+      }
     }, [updateArrowMarker]);
+
+    // Wakes the interpolation loop back up if it had settled and stopped.
+    // Called whenever a new GPS fix/heading arrives, or follow/navigation
+    // mode is (re)enabled — anything that could require a fresh camera move.
+    const kickAnimation = useCallback(() => {
+      if (!isAnimatingRef.current) {
+        isAnimatingRef.current = true;
+        animationFrameRef.current = requestAnimationFrame(animateFrame);
+      }
+    }, [animateFrame]);
+    const kickAnimationRef = useRef(kickAnimation);
+    kickAnimationRef.current = kickAnimation;
 
     useEffect(() => {
       if (isMapReadyRef.current) {
@@ -491,12 +548,9 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           applyTrafficVisibility(true);
         }
 
+        // Single zoom_changed listener (was two identical subscriptions)
         map.addListener('zoom_changed', () => {
           onZoomChange(Math.round(map.getZoom() ?? 12));
-        });
-
-        // Zoom tracking
-        map.addListener('zoom_changed', () => {
           isZoomingRef.current = true;
           if (zoomTimeoutRef.current) clearTimeout(zoomTimeoutRef.current);
           zoomTimeoutRef.current = setTimeout(() => {
@@ -582,6 +636,8 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
               targetHeadingRef.current = newHeading;
             }
 
+            kickAnimationRef.current();
+
             if (!map || !isMapReadyRef.current) return;
 
             // Accuracy circle — center is kept in sync every frame by animateFrame
@@ -660,23 +716,42 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           casing.setMap(null);
           line.setMap(null);
         });
+        // Explicitly detach all listeners from this map instance instead of
+        // relying on GC to eventually collect them once nothing references it.
+        if (mapRef.current) {
+          google.maps.event.clearInstanceListeners(mapRef.current);
+        }
         mapRef.current = null;
         isMapReadyRef.current = false;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Continuous position/heading interpolation loop — runs for the lifetime
-    // of the component, independent of the map-init effect above.
+    // Detect Tesla's browser once — used by animateFrame to throttle to ~24fps.
     useEffect(() => {
-      animationFrameRef.current = requestAnimationFrame(animateFrame);
+      isTeslaRef.current = isTeslaBrowser();
+    }, []);
+
+    // The interpolation loop is NOT started here — it only runs while there's
+    // an actual position/heading gap to animate (see kickAnimation, invoked
+    // from the GPS watcher and from follow/navigation-mode changes below).
+    // This cleanup just guards against a frame surviving unmount.
+    useEffect(() => {
       return () => {
         if (animationFrameRef.current !== null) {
           cancelAnimationFrame(animationFrameRef.current);
           animationFrameRef.current = null;
         }
+        isAnimatingRef.current = false;
       };
-    }, [animateFrame]);
+    }, []);
+
+    // Re-engage the camera the instant follow/navigation mode turns on, even
+    // if no new GPS fix has arrived yet (otherwise the camera would wait for
+    // the next GPS tick, up to ~1s, before reacting to "Start Route"/Recenter).
+    useEffect(() => {
+      if (followMode) kickAnimationRef.current();
+    }, [followMode, navigationMode]);
 
     useImperativeHandle(
       ref,
