@@ -379,12 +379,14 @@ function shiftTrafficSegments(
 
 // Renders the active A→B route as one or more colored polylines drawn from
 // a fixed, bounded pool — never creates/destroys map objects per update.
-// Adjacent segments share their boundary coordinate so there is no visual
-// gap. Real per-segment traffic data (from the Routes API) renders as
-// GREEN (flowing normally) or RED (congested) — never yellow/orange, per
-// spec. When no traffic data is available at all for this route, the whole
-// thing renders as a single plain BLUE segment (the route's default color,
-// never fabricated as "flowing normally" green without real data).
+// Each segment's coordinate range is disjoint from its neighbors (only the
+// shared boundary point overlaps), so a yellow/red segment always fully
+// REPLACES the blue route for that stretch — there is no separate "blue
+// underneath" layer for it to hide behind. Real per-segment traffic data
+// (from the Routes API) renders as BLUE (normal), YELLOW (slow), or RED
+// (heavy/congested) — never green. When no traffic data is available at
+// all for this route, the whole thing renders as a single plain BLUE
+// segment (the route's default color).
 function renderRouteWithTraffic(
   pool: google.maps.Polyline[],
   coordinates: Array<[number, number]>,
@@ -468,12 +470,13 @@ const MAX_ROUTE_SEGMENTS = 24;
 // for it at all (e.g. the legacy server-side /api/directions fallback path).
 const ROUTE_DEFAULT_COLOR = '#1a73e8';
 
-// Real traffic-condition colors — GREEN/RED only per spec (no yellow/orange).
-// SLOW and TRAFFIC_JAM both collapse to RED: the requirement is a binary
-// "flowing normally" vs "congestion" signal, not three gradations.
+// Real traffic-condition colors — BLUE/YELLOW/RED only per spec. NORMAL is
+// intentionally the same blue as ROUTE_DEFAULT_COLOR (normal road stays
+// blue, whether that's because real data says so or because no data exists
+// at all) — never green, per spec.
 const TRAFFIC_SEGMENT_COLOR: Record<TrafficSegment['category'], string> = {
-  NORMAL: '#34a853',
-  SLOW: '#ea4335',
+  NORMAL: ROUTE_DEFAULT_COLOR,
+  SLOW: '#fbbc04',
   TRAFFIC_JAM: '#ea4335',
 };
 
