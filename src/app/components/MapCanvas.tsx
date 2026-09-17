@@ -34,7 +34,6 @@ const NAV_MODE_LOOKAHEAD_M = 55; // how far ahead of the user to bias the camera
 const POSITION_LERP_ALPHA = 0.18; // marker position easing toward latest GPS fix
 const ARROW_HEADING_LERP_ALPHA = 0.25; // marker rotation easing (snappier)
 const CAMERA_BEARING_ALPHA = 0.12; // camera rotation easing (slightly slower, less twitchy)
-const ARROW_ICON_UPDATE_THRESHOLD_DEG = 1.5; // skip SVG/blob regen for imperceptible heading deltas
 const CAMERA_MOVE_THRESHOLD_M = 0.1; // skip redundant moveCamera calls once converged
 const CAMERA_HEADING_THRESHOLD_DEG = 0.1;
 
@@ -56,12 +55,48 @@ const TESLA_FRAME_INTERVAL_MS = 1000 / 24;
 const OFF_ROUTE_THRESHOLD = 80;
 const OFF_ROUTE_CHECK_INTERVAL = 5000;
 
+// Route progress trimming: only meaningful during active navigation, and
+// only needs to look right, not be pixel-perfect every frame — recomputing
+// the closest point on a multi-hundred-vertex polyline every animation frame
+// would be pure waste. Once a second is plenty to look smooth to the eye.
+const ROUTE_TRIM_INTERVAL_MS = 1000;
+
 // Google Maps map type IDs mapped to our MapStyle keys
 const GOOGLE_MAP_TYPE: Record<MapStyle, string> = {
   dark: 'roadmap',
   standard: 'roadmap',
   satellite: 'hybrid',
   streets: 'roadmap',
+};
+
+// Real heading-up map ROTATION is a vector-map-only Google Maps feature —
+// confirmed against Google's own documentation: classic raster tiles do not
+// visually rotate via moveCamera({heading}), regardless of how correctly the
+// heading value itself is computed. Vector rendering requires a Map ID
+// (created in Google Cloud Console — this can't be done from code). Without
+// one configured, we stay on raster (current behavior, no rotation) rather
+// than silently watermarking a production deploy with Google's DEMO_MAP_ID.
+//
+// IMPORTANT: a Map ID and the `styles` array are mutually exclusive — Google
+// ignores `styles` whenever a mapId is set, and expects styling to be
+// configured against that Map ID in Cloud Console instead (Cloud-based
+// styling accepts the exact same JSON style-rule format as DARK_STYLES
+// below, so it can be pasted in as-is). See the setup notes in the summary
+// this task ends with.
+const GOOGLE_MAPS_MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID || undefined;
+const USE_VECTOR_MAP = !!GOOGLE_MAPS_MAP_ID;
+
+// Google's Map `backgroundColor` option is what actually shows through
+// wherever tiles haven't loaded yet — at the map's edges while panning, when
+// zoomed out past the available tile set, etc. Left unset, it defaults to a
+// light grey/white, which is exactly the "white flash" seen in dark mode.
+// Setting this per-style is the correct, supported fix (not a CSS overlay
+// hack) — see https://developers.google.com/maps/documentation/javascript/reference/map#MapOptions.backgroundColor
+const MAP_BACKGROUND_COLOR: Record<MapStyle, string> = {
+  dark: '#0a0a0a',
+  standard: '#e9e5dc',
+  satellite: '#000000',
+  streets: '#e9e5dc',
 };
 
 // Dark mode styles for Google Maps — near-black, monochrome, minimal (matches TeslaNav brand style)
@@ -106,23 +141,110 @@ const MAP_STYLES_CONFIG: Record<MapStyle, Array<{ elementType?: string; featureT
   streets: STREETS_STYLES,
 };
 
-// Google Maps' image-based Marker `icon` has no native `rotation` support
-// (that only exists on vector `Symbol` icons), so heading is baked directly
-// into the SVG markup via a <g transform="rotate(...)"> around the arrow only
-// — the circular puck background stays visually unaffected by rotation.
-const ARROW_SIZE = 44;
-const ARROW_CENTER = ARROW_SIZE / 2;
-function buildArrowSvg(headingDeg: number): string {
-  return `
-<svg xmlns="http://www.w3.org/2000/svg" width="${ARROW_SIZE}" height="${ARROW_SIZE}" viewBox="0 0 ${ARROW_SIZE} ${ARROW_SIZE}">
-  <circle cx="${ARROW_CENTER}" cy="${ARROW_CENTER}" r="20" fill="#121a2e" stroke="#1a2744" stroke-width="1.5"/>
-  <circle cx="${ARROW_CENTER}" cy="${ARROW_CENTER}" r="20" fill="none" stroke="#1a73e8" stroke-opacity="0.35" stroke-width="1.5"/>
-  <g transform="rotate(${headingDeg} ${ARROW_CENTER} ${ARROW_CENTER})">
-    <path d="M22 8 L31 32 L22 26 L13 32 Z" fill="#e63946" stroke="#ffffff" stroke-width="1.75" stroke-linejoin="round"/>
-  </g>
-</svg>
-`;
+// Vehicle/location marker asset (provided PNG, tip pointing up/north by
+// design — a CSS rotate(heading deg) therefore maps directly to compass
+// bearing with no offset needed).
+const ARROW_ASSET_URL = '/markers/arrow.png';
+const ARROW_DISPLAY_SIZE = 40; // on-screen size in px
+const ARROW_HALO_SIZE = 54; // circular puck behind the arrow
+
+// Destination pin asset (provided PNG). Anchor is the bottom tip of the
+// teardrop shape so it points exactly at the destination coordinate.
+const PIN_ASSET_URL = '/markers/pin.png';
+const PIN_DISPLAY_WIDTH = 34;
+const PIN_DISPLAY_HEIGHT = 34;
+
+// Google Maps' image-based Marker.setIcon() has no native rotation support
+// (only vector Symbol icons expose a `rotation` field), and the provided
+// arrow is a real raster PNG, not a tiny vector path — regenerating a large
+// image blob on every heading change would be real, avoidable memory/CPU
+// churn. Instead, the rotating arrow is a lightweight OverlayView: a plain
+// DOM element positioned via the map's projection, rotated with a CSS
+// transform. The image itself loads once (browser-cached); rotating it after
+// that is just a style update — effectively free and GPU-composited.
+//
+// OverlayView only exists once the Maps JS library has loaded, so this class
+// is created lazily (see createArrowOverlayClass, called once inside the
+// map-init effect below) rather than declared at module scope.
+function createArrowOverlayClass() {
+  return class ArrowOverlay extends google.maps.OverlayView {
+    private container: HTMLDivElement | null = null;
+    private arrowEl: HTMLDivElement | null = null;
+    private position: google.maps.LatLngLiteral;
+    private heading: number;
+
+    constructor(position: google.maps.LatLngLiteral, heading: number) {
+      super();
+      this.position = position;
+      this.heading = heading;
+    }
+
+    onAdd() {
+      const container = document.createElement('div');
+      container.style.position = 'absolute';
+      container.style.width = `${ARROW_HALO_SIZE}px`;
+      container.style.height = `${ARROW_HALO_SIZE}px`;
+      container.style.pointerEvents = 'none';
+      container.style.borderRadius = '50%';
+      container.style.background = 'rgba(18,26,46,0.92)';
+      container.style.border = '1.5px solid #1a2744';
+      container.style.boxShadow = '0 0 0 1.5px rgba(26,115,232,0.35)';
+      container.style.display = 'flex';
+      container.style.alignItems = 'center';
+      container.style.justifyContent = 'center';
+
+      const arrowEl = document.createElement('div');
+      arrowEl.style.width = `${ARROW_DISPLAY_SIZE}px`;
+      arrowEl.style.height = `${ARROW_DISPLAY_SIZE}px`;
+      arrowEl.style.willChange = 'transform';
+      arrowEl.style.transformOrigin = '50% 50%';
+      arrowEl.style.backgroundImage = `url(${ARROW_ASSET_URL})`;
+      arrowEl.style.backgroundSize = 'contain';
+      arrowEl.style.backgroundRepeat = 'no-repeat';
+      arrowEl.style.backgroundPosition = 'center';
+
+      container.appendChild(arrowEl);
+      this.container = container;
+      this.arrowEl = arrowEl;
+      this.applyHeading();
+
+      this.getPanes()?.overlayLayer.appendChild(container);
+    }
+
+    draw() {
+      if (!this.container) return;
+      const projection = this.getProjection();
+      if (!projection) return;
+      const point = projection.fromLatLngToDivPixel(new google.maps.LatLng(this.position));
+      if (!point) return;
+      this.container.style.left = `${point.x - ARROW_HALO_SIZE / 2}px`;
+      this.container.style.top = `${point.y - ARROW_HALO_SIZE / 2}px`;
+    }
+
+    onRemove() {
+      this.container?.parentNode?.removeChild(this.container);
+      this.container = null;
+      this.arrowEl = null;
+    }
+
+    setPosition(position: google.maps.LatLngLiteral) {
+      this.position = position;
+      this.draw();
+    }
+
+    setHeading(heading: number) {
+      this.heading = heading;
+      this.applyHeading();
+    }
+
+    private applyHeading() {
+      if (this.arrowEl) {
+        this.arrowEl.style.transform = `rotate(${this.heading}deg)`;
+      }
+    }
+  };
 }
+type ArrowOverlayInstance = InstanceType<ReturnType<typeof createArrowOverlayClass>>;
 
 // Caches the last known GPS fix so the NEXT session can open the map
 // centered near the user at a city-level zoom instead of always starting at
@@ -203,6 +325,43 @@ function pointToSegmentDistance(
   return haversineDistance(p, proj);
 }
 
+// Route progress: finds the point on `route` closest to `pos`, then returns
+// the route trimmed to start from there — dropping every vertex already
+// traveled. Used to make the polyline shrink from behind the vehicle as it
+// advances instead of leaving the whole traveled path drawn on the map.
+function trimRouteAtPosition(
+  route: Array<[number, number]>,
+  pos: [number, number]
+): Array<[number, number]> {
+  if (route.length < 2) return route;
+
+  let bestDist = Infinity;
+  let bestIdx = 0;
+  let bestProj: [number, number] = route[0];
+
+  for (let i = 0; i < route.length - 1; i++) {
+    const a = route[i];
+    const b = route[i + 1];
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    let proj: [number, number];
+    if (dx === 0 && dy === 0) {
+      proj = a;
+    } else {
+      const t = Math.max(0, Math.min(1, ((pos[0] - a[0]) * dx + (pos[1] - a[1]) * dy) / (dx * dx + dy * dy)));
+      proj = [a[0] + t * dx, a[1] + t * dy];
+    }
+    const d = haversineDistance(pos, proj);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = i;
+      bestProj = proj;
+    }
+  }
+
+  return [bestProj, ...route.slice(bestIdx + 1)];
+}
+
 interface MapCanvasProps {
   language: Language;
   mapStyle: MapStyle;
@@ -266,9 +425,8 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     // Markers
     const destinationMarkerRef = useRef<google.maps.Marker | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
     const pinMarkerRef = useRef<google.maps.Marker | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
-    const userArrowMarkerRef = useRef<google.maps.Marker | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
-    const arrowIconUrlRef = useRef<string | null>(null);
-    const lastIconHeadingRef = useRef<number>(0);
+    const userArrowMarkerRef = useRef<ArrowOverlayInstance | null>(null);
+    const ArrowOverlayClassRef = useRef<ReturnType<typeof createArrowOverlayClass> | null>(null);
     const accuracyCircleRef = useRef<google.maps.Circle | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
     const trafficLayerRef = useRef<google.maps.TrafficLayer | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -300,6 +458,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const onOffRouteRef = useRef(onOffRoute);
     const activeRouteGeometryRef = useRef<Array<[number, number]> | null>(null);
     const lastOffRouteCheckRef = useRef<number>(0);
+    const lastRouteTrimRef = useRef<number>(0);
     const lastPositionWriteRef = useRef<number>(0);
     const isDraggingRef = useRef(false);
     const isZoomingRef = useRef(false);
@@ -333,63 +492,36 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       let map = mapRef.current;
       if (!map) return;
       map.setMapTypeId(GOOGLE_MAP_TYPE[style]);
-      if (style !== 'satellite') {
-        map.setOptions({ styles: MAP_STYLES_CONFIG[style] });
-      } else {
-        map.setOptions({ styles: [] });
+      map.setOptions({ backgroundColor: MAP_BACKGROUND_COLOR[style] });
+      // With a Map ID set, styling is controlled from Cloud Console, not the
+      // JS `styles` array (Google ignores it either way) — skip sending it.
+      if (!USE_VECTOR_MAP) {
+        map.setOptions({ styles: style !== 'satellite' ? MAP_STYLES_CONFIG[style] : [] });
       }
       currentStyleRef.current = style;
     }, []);
 
-    // Regenerate the marker's SVG icon with heading baked in. Only called when
-    // the heading has actually moved enough to matter (see updateArrowMarker),
-    // so this isn't invoked on every animation frame — avoids blob churn.
-    const setArrowIcon = useCallback((headingDeg: number) => {
-      const marker = userArrowMarkerRef.current;
-      if (!marker) return;
-
-      const svg = buildArrowSvg(Math.round(headingDeg * 10) / 10);
-      const blob = new Blob([svg], { type: 'image/svg+xml' });
-      const url = URL.createObjectURL(blob);
-      const prevUrl = arrowIconUrlRef.current;
-
-      marker.setIcon({
-        url,
-        scaledSize: new google.maps.Size(ARROW_SIZE, ARROW_SIZE),
-        anchor: new google.maps.Point(ARROW_CENTER, ARROW_CENTER),
-      });
-
-      arrowIconUrlRef.current = url;
-      if (prevUrl) URL.revokeObjectURL(prevUrl);
-    }, []);
-
-    // Moves the user marker and — only when its heading changed meaningfully —
-    // regenerates its rotated icon. Called every animation frame with the
-    // continuously-interpolated position/heading (see animateFrame below).
+    // Moves the user marker overlay and updates its CSS rotation. Called every
+    // animation frame with the continuously-interpolated position/heading
+    // (see animateFrame below) — cheap either way, since this is just a
+    // position/transform update on a persistent DOM node, not an icon/blob
+    // regeneration.
     const updateArrowMarker = useCallback((coords: [number, number], heading: number) => {
       const map = mapRef.current;
       if (!map || !isMapReadyRef.current) return;
       const position = { lat: coords[1], lng: coords[0] };
 
       if (!userArrowMarkerRef.current) {
-        userArrowMarkerRef.current = new google.maps.Marker({
-          map,
-          position,
-          zIndex: 10,
-          optimized: false,
-        });
-        setArrowIcon(heading);
-        lastIconHeadingRef.current = heading;
+        if (!ArrowOverlayClassRef.current) return;
+        const overlay = new ArrowOverlayClassRef.current(position, heading);
+        overlay.setMap(map);
+        userArrowMarkerRef.current = overlay;
         return;
       }
 
       userArrowMarkerRef.current.setPosition(position);
-
-      if (Math.abs(angleDiff(lastIconHeadingRef.current, heading)) >= ARROW_ICON_UPDATE_THRESHOLD_DEG) {
-        setArrowIcon(heading);
-        lastIconHeadingRef.current = heading;
-      }
-    }, [setArrowIcon]);
+      userArrowMarkerRef.current.setHeading(heading);
+    }, []);
 
     // Per-frame loop: eases the rendered position/heading toward the latest
     // real GPS fix (userLocationRef / targetHeadingRef), so the marker and —
@@ -452,6 +584,24 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
               tilt,
             });
             lastCameraStateRef.current = { lat: center[1], lng: center[0], heading: cameraHeadingRef.current, zoom };
+          }
+        }
+
+        // Route progress: trim the traveled section off the back of the
+        // route polyline as the vehicle advances, so only the remaining
+        // road ahead stays drawn. Only while actually navigating (not just
+        // previewing a calculated route), and throttled — this only needs
+        // to look right, not be recomputed 60x/sec.
+        if (navigationModeRef.current && activeRouteGeometryRef.current && activeRouteGeometryRef.current.length > 1) {
+          if (now - lastRouteTrimRef.current > ROUTE_TRIM_INTERVAL_MS) {
+            lastRouteTrimRef.current = now;
+            const trimmed = trimRouteAtPosition(activeRouteGeometryRef.current, nextPosition);
+            if (trimmed.length !== activeRouteGeometryRef.current.length) {
+              activeRouteGeometryRef.current = trimmed;
+              const path = trimmed.map(([lng, lat]) => ({ lat, lng }));
+              mainRouteCasingRef.current?.setPath(path);
+              mainRoutePolylineRef.current?.setPath(path);
+            }
           }
         }
 
@@ -530,7 +680,12 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           minZoom: 3,
           maxZoom: 20,
           mapTypeId: GOOGLE_MAP_TYPE[mapStyle],
-          styles: MAP_STYLES_CONFIG[mapStyle],
+          // styles and mapId are mutually exclusive (Google ignores `styles`
+          // whenever mapId is set) — only send one or the other.
+          ...(USE_VECTOR_MAP
+            ? { mapId: GOOGLE_MAPS_MAP_ID }
+            : { styles: MAP_STYLES_CONFIG[mapStyle] }),
+          backgroundColor: MAP_BACKGROUND_COLOR[mapStyle],
           disableDefaultUI: true,
           gestureHandling: 'greedy',
           clickableIcons: false,
@@ -540,10 +695,17 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           zoomControl: false,
           scaleControl: false,
           rotateControl: false,
+          // Rotation/tilt should only ever come from our own programmatic
+          // moveCamera() calls during navigation, never from a two-finger
+          // touch gesture — that would fight with heading-up mode.
+          headingInteractionEnabled: false,
+          tiltInteractionEnabled: false,
         });
 
         mapRef.current = map;
         currentStyleRef.current = mapStyle;
+        // google.maps.OverlayView only exists now that 'maps' has loaded.
+        ArrowOverlayClassRef.current = createArrowOverlayClass();
 
         // Initialize route polylines
         mainRouteCasingRef.current = new google.maps.Polyline({
@@ -760,10 +922,6 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           clearTimeout(zoomTimeoutRef.current);
           zoomTimeoutRef.current = null;
         }
-        if (arrowIconUrlRef.current) {
-          URL.revokeObjectURL(arrowIconUrlRef.current);
-          arrowIconUrlRef.current = null;
-        }
         // Clean up markers
         destinationMarkerRef.current?.setMap(null);
         pinMarkerRef.current?.setMap(null);
@@ -913,12 +1071,9 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
                 position,
                 zIndex: 9,
                 icon: {
-                  path: google.maps.SymbolPath.CIRCLE,
-                  scale: 12,
-                  fillColor: '#e53935',
-                  fillOpacity: 1,
-                  strokeColor: '#ffffff',
-                  strokeWeight: 3,
+                  url: PIN_ASSET_URL,
+                  scaledSize: new google.maps.Size(PIN_DISPLAY_WIDTH, PIN_DISPLAY_HEIGHT),
+                  anchor: new google.maps.Point(PIN_DISPLAY_WIDTH / 2, Math.round(PIN_DISPLAY_HEIGHT * 0.93)),
                 },
               });
             } else {
@@ -941,12 +1096,9 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
                 position,
                 zIndex: 9,
                 icon: {
-                  path: google.maps.SymbolPath.CIRCLE,
-                  scale: 14,
-                  fillColor: '#FF6F00',
-                  fillOpacity: 1,
-                  strokeColor: '#ffffff',
-                  strokeWeight: 3,
+                  url: PIN_ASSET_URL,
+                  scaledSize: new google.maps.Size(PIN_DISPLAY_WIDTH, PIN_DISPLAY_HEIGHT),
+                  anchor: new google.maps.Point(PIN_DISPLAY_WIDTH / 2, Math.round(PIN_DISPLAY_HEIGHT * 0.93)),
                 },
               });
             } else {
