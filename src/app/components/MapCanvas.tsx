@@ -377,25 +377,34 @@ function shiftTrafficSegments(
   return shifted;
 }
 
-// Renders the active A→B route as one or more colored polylines (blue /
-// yellow / red, per real Routes API traffic data) drawn from a fixed,
-// bounded pool — never creates/destroys map objects per update. Adjacent
-// segments share their boundary coordinate so there is no visual gap.
-// Falls back to a single all-blue segment when no traffic data is available
-// (never fabricates categories).
+// Renders the active A→B route as one or more colored polylines drawn from
+// a fixed, bounded pool — never creates/destroys map objects per update.
+// Adjacent segments share their boundary coordinate so there is no visual
+// gap. Real per-segment traffic data (from the Routes API) renders as
+// GREEN (flowing normally) or RED (congested) — never yellow/orange, per
+// spec. When no traffic data is available at all for this route, the whole
+// thing renders as a single plain BLUE segment (the route's default color,
+// never fabricated as "flowing normally" green without real data).
 function renderRouteWithTraffic(
   pool: google.maps.Polyline[],
   coordinates: Array<[number, number]>,
   segments: TrafficSegment[] | null | undefined
 ) {
   const path = coordinates.map(([lng, lat]) => ({ lat, lng }));
-  const effective: TrafficSegment[] =
-    segments && segments.length > 0
-      ? segments
-      : [{ startIdx: 0, endIdx: coordinates.length - 1, category: 'NORMAL' }];
+
+  if (!segments || segments.length === 0) {
+    if (path.length >= 2 && pool.length > 0) {
+      pool[0].setPath(path);
+      pool[0].setOptions({ strokeColor: ROUTE_DEFAULT_COLOR });
+    }
+    for (let i = path.length >= 2 ? 1 : 0; i < pool.length; i++) {
+      pool[i].setPath([]);
+    }
+    return;
+  }
 
   let used = 0;
-  for (const seg of effective) {
+  for (const seg of segments) {
     if (used >= pool.length) break;
     const start = Math.max(0, seg.startIdx);
     const end = Math.min(coordinates.length - 1, seg.endIdx);
@@ -455,9 +464,16 @@ const MAX_ALT_ROUTES = 3;
 // response creating unbounded map objects.
 const MAX_ROUTE_SEGMENTS = 24;
 
+// The route's default color when no real per-segment traffic data exists
+// for it at all (e.g. the legacy server-side /api/directions fallback path).
+const ROUTE_DEFAULT_COLOR = '#1a73e8';
+
+// Real traffic-condition colors — GREEN/RED only per spec (no yellow/orange).
+// SLOW and TRAFFIC_JAM both collapse to RED: the requirement is a binary
+// "flowing normally" vs "congestion" signal, not three gradations.
 const TRAFFIC_SEGMENT_COLOR: Record<TrafficSegment['category'], string> = {
-  NORMAL: '#1a73e8', // same blue as the previous single-color route line
-  SLOW: '#fbbc04',
+  NORMAL: '#34a853',
+  SLOW: '#ea4335',
   TRAFFIC_JAM: '#ea4335',
 };
 
@@ -786,7 +802,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
             new google.maps.Polyline({
               map,
               path: [],
-              strokeColor: TRAFFIC_SEGMENT_COLOR.NORMAL,
+              strokeColor: ROUTE_DEFAULT_COLOR,
               strokeWeight: 7,
               strokeOpacity: 1,
               zIndex: 2,
