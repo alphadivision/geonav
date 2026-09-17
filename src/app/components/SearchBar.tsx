@@ -25,6 +25,8 @@ interface SearchBarProps {
   t: Translations;
   onSelectResult: (result: SearchResult) => void;
   disabled?: boolean;
+  /** Compact pill sizing for tight corner slots (e.g. replacing a small badge). */
+  compact?: boolean;
 }
 
 function getPoiIcon(category?: string, maki?: string) {
@@ -51,6 +53,7 @@ export default function SearchBar({
   t,
   onSelectResult,
   disabled,
+  compact = false,
 }: SearchBarProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -317,28 +320,28 @@ export default function SearchBar({
   const Icon = getPoiIcon();
 
   return (
-    <div className="relative w-full">
+    <div className={compact ? 'relative w-[160px] sm:w-[220px] md:w-[260px] flex-shrink-0' : 'relative w-full'}>
       {/* Search input container */}
       <div
         className={[
-          'glass-dark rounded-2xl overflow-hidden transition-all duration-200',
+          compact ? 'glass-dark rounded-full overflow-hidden transition-all duration-200 h-11' : 'glass-dark rounded-2xl overflow-hidden transition-all duration-200',
           isMounted && isFocused
             ? 'ring-2 ring-primary shadow-lg shadow-primary/20'
             : 'shadow-xl shadow-black/40',
         ].join(' ')}
       >
-        <div className="flex items-center px-4 py-0">
+        <div className={compact ? 'flex items-center h-full px-3.5' : 'flex items-center px-4 py-0'}>
           {/* Search icon / loading spinner */}
-          <div className="flex-shrink-0 mr-3">
+          <div className={compact ? 'flex-shrink-0 mr-2' : 'flex-shrink-0 mr-3'}>
             {isMounted && isLoading ? (
               <Loader2
-                size={22}
+                size={compact ? 18 : 22}
                 className="text-primary spinner"
                 aria-label={t.searchingFor}
               />
             ) : (
               <Search
-                size={22}
+                size={compact ? 18 : 22}
                 className={isMounted && isFocused ? 'text-primary' : 'text-muted-foreground'}
               />
             )}
@@ -354,7 +357,11 @@ export default function SearchBar({
             onBlur={handleBlur}
             placeholder={t.searchPlaceholder}
             disabled={disabled}
-            className="flex-1 bg-transparent text-foreground placeholder-muted-foreground text-lg font-medium py-4 outline-none min-w-0"
+            className={
+              compact
+                ? 'flex-1 bg-transparent text-foreground placeholder-muted-foreground text-sm font-medium outline-none min-w-0'
+                : 'flex-1 bg-transparent text-foreground placeholder-muted-foreground text-lg font-medium py-4 outline-none min-w-0'
+            }
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -372,7 +379,7 @@ export default function SearchBar({
               aria-label={t.clearSearch || 'Clear'}
               data-no-map-tap
             >
-              <X size={18} className="text-muted-foreground" />
+              <X size={compact ? 16 : 18} className="text-muted-foreground" />
             </button>
           )}
         </div>
@@ -380,11 +387,12 @@ export default function SearchBar({
 
       {/* Results dropdown */}
       {isMounted && isOpen && (
-        <div data-no-map-tap>
+        <div data-no-map-tap className={compact ? 'w-[280px] sm:w-[320px]' : ''}>
           <SearchResults
             results={results}
             isLoading={isLoading}
             hasError={hasError}
+            query={query}
             language={language}
             t={t}
             onSelect={handleSelectResult}

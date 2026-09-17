@@ -30,7 +30,6 @@ import RouteAlternativesPanel from './RouteAlternativesPanel';
 import PinDestinationCard from './PinDestinationCard';
 import RecenterButton from './RecenterButton';
 import TrafficButton from './TrafficButton';
-import SupportBanner from './SupportBanner';
 import HelpButton from './HelpButton';
 import BrandBadge from './BrandBadge';
 import type { MapCanvasHandle } from './MapCanvas';
@@ -402,6 +401,65 @@ export default function NavigationMapClient() {
     }
   }, [selectedDestination, t, fetchRoutes]);
 
+  // Corner quick-search: selecting a result both sets the destination AND
+  // immediately calculates/displays the route (reuses the same fetchRoutes
+  // pipeline as handleShowRoute — no second routing system). Uses the result's
+  // coordinates directly instead of the (still-stale) selectedDestination
+  // state, since state set above hasn't committed yet in this same tick.
+  const handleQuickSearchSelect = useCallback(
+    async (result: SearchResult) => {
+      setSelectedDestination(result);
+      setRouteInfo(null);
+      setRouteAlternatives([]);
+      setSelectedRouteIndex(0);
+      setPinDestination(null);
+      setShowReplacePrompt(null);
+
+      if (mapRef.current) {
+        mapRef.current.setDestinationMarker(result.coordinates);
+        mapRef.current.setPinMarker(null);
+      }
+
+      const loc = userLocationRef.current;
+      if (!loc) {
+        setAppState('destinationSelected');
+        if (mapRef.current) mapRef.current.flyTo(result.coordinates, 15);
+        setErrorType('location_denied');
+        setErrorMessage(t.locationDenied);
+        return;
+      }
+
+      setAppState('calculatingRoute');
+
+      try {
+        const alternatives = await fetchRoutes(loc, result.coordinates);
+        if (!alternatives || alternatives.length === 0) throw new Error('No routes');
+
+        const fastestIdx = alternatives.find((r) => r.isFastest)?.index ?? 0;
+        setRouteAlternatives(alternatives);
+        setSelectedRouteIndex(fastestIdx);
+        setRouteInfo({
+          distance: alternatives[fastestIdx].distance,
+          duration: alternatives[fastestIdx].duration,
+          geometry: alternatives[fastestIdx].geometry,
+        });
+        setAppState('routeActive');
+        setFollowMode(true);
+
+        if (mapRef.current) {
+          mapRef.current.setAlternativeRoutes(alternatives, fastestIdx);
+          mapRef.current.fitRoute(alternatives[fastestIdx].geometry);
+        }
+      } catch (err) {
+        console.error('[quick-search route] Error:', err);
+        setAppState('destinationSelected');
+        setErrorType('route_error');
+        setErrorMessage(t.routeError);
+      }
+    },
+    [fetchRoutes, t]
+  );
+
   const handleSelectRoute = useCallback(
     (index: number) => {
       const alts = routeAlternativesRef.current;
@@ -697,11 +755,17 @@ export default function NavigationMapClient() {
         />
       </div>
 
-      {/* Top overlay: support banner + search bar + language switcher + compass */}
+      {/* Top overlay: corner destination search (replaces the old Support badge) + main search bar + language switcher + compass */}
       <div className="fixed top-0 left-0 right-0 z-panel pointer-events-none">
         <div className="flex items-start gap-3 p-3 sm:p-4 pointer-events-auto" data-no-map-tap>
-          <div className="flex-shrink-0 mt-0.5 hidden sm:block">
-            <SupportBanner t={t} />
+          <div className="flex-shrink-0 mt-0.5">
+            <SearchBar
+              language={language}
+              t={t}
+              onSelectResult={handleQuickSearchSelect}
+              disabled={!isMapReady}
+              compact
+            />
           </div>
           <div className="flex-1 min-w-0">
             <SearchBar
@@ -724,10 +788,6 @@ export default function NavigationMapClient() {
               followMode={followMode}
             />
           </div>
-        </div>
-        {/* Support banner on small screens: own row below search so it doesn't crowd it */}
-        <div className="px-3 pb-2 pointer-events-auto sm:hidden" data-no-map-tap>
-          <SupportBanner t={t} />
         </div>
       </div>
 

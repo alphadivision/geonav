@@ -66,12 +66,10 @@ export interface Translations {
   offRoute: string;
   // Recenter / compass button
   recenter: string;
-  // Support / settings / help
-  supportProject: string;
+  // Settings / help
   settings: string;
   help: string;
   helpText: string;
-  supportMessage: string;
 }
 
 export const translations: Record<Language, Translations> = {
@@ -142,7 +140,6 @@ export const translations: Record<Language, Translations> = {
     settings: 'პარამეტრები',
     help: 'დახმარება',
     helpText: 'მოძებნეთ მისამართი ზემოთ და დააჭირეთ მარშრუტს ნავიგაციის დასაწყებად. გამოიყენეთ ღილაკები ეკრანის კიდეებზე რუკის მართვისთვის.',
-    supportMessage: 'TeslaNav სამუდამოდ იქნება უფასო. თქვენი მხარდაჭერა გვეხმარება სერვერის ხარჯების დაფარვასა და განვითარების გაგრძელებაში!',
   },
   en: {
     appName: 'GeoNav',
@@ -211,7 +208,6 @@ export const translations: Record<Language, Translations> = {
     settings: 'Settings',
     help: 'Help',
     helpText: 'Search an address above and tap a route to start navigating. Use the buttons on the edges of the screen to control the map.',
-    supportMessage: 'TeslaNav will always be free. Your support helps cover server costs and keeps development going!',
   },
 };
 
