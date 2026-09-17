@@ -58,7 +58,7 @@ const OFF_ROUTE_CHECK_INTERVAL = 5000;
 // Pin placement requires a press-and-hold of this length (a normal quick tap
 // no longer drops a pin) — see the mousedown/mouseup/dragstart handling in
 // the map-init effect below.
-const LONG_PRESS_DURATION_MS = 3500;
+const LONG_PRESS_DURATION_MS = 1500;
 // Same threshold already used elsewhere to tell a real drag from a
 // stationary click — reused here to cancel a pending long-press if the
 // pointer moves meaningfully before the hold completes.

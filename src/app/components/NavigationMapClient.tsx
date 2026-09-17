@@ -755,17 +755,19 @@ export default function NavigationMapClient() {
     );
   }, []);
 
-  // Tap the compass: if we're not currently following, this just recenters
-  // and resumes follow (existing behavior). If we're ALREADY following, the
-  // tap instead cycles the North-Up/Heading-Up view mode — the standard
-  // "tap once to recenter, tap again to toggle rotation lock" pattern used
-  // by Google Maps/Waze, and what the compass button visually communicates
-  // via its N label / arrow icon.
+  // Tap the compass: the FIRST press (whenever we're not already following —
+  // including the very first tap ever, and any tap after a manual pan
+  // disabled follow) always and deterministically activates Heading-Up:
+  // resumes follow AND forces the rotating-map mode, regardless of whatever
+  // mode was last active. Pressing again while ALREADY following toggles
+  // North-Up/Heading-Up — the standard "tap once to recenter, tap again to
+  // toggle rotation lock" pattern used by Google Maps/Waze.
   const handleRecenter = useCallback(() => {
     if (followMode) {
       setMapViewMode((mode) => (mode === 'northUp' ? 'headingUp' : 'northUp'));
       return;
     }
+    setMapViewMode('headingUp');
     setFollowMode(true);
     if (mapRef.current) mapRef.current.locateUser();
   }, [followMode]);
