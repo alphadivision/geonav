@@ -29,6 +29,7 @@ import RouteAlternativesPanel from './RouteAlternativesPanel';
 import PinDestinationCard from './PinDestinationCard';
 import RecenterButton from './RecenterButton';
 import MapControlsPanel from './MapControlsPanel';
+import NavigationHUD from './NavigationHUD';
 import BrandBadge from './BrandBadge';
 import type { MapCanvasHandle } from './MapCanvas';
 
@@ -143,6 +144,7 @@ export default function NavigationMapClient() {
   const [mapZoom, setMapZoom] = useState(12);
   const [mapStyle, setMapStyle] = useState<MapStyle>('dark');
   const [followMode, setFollowMode] = useState(false);
+  const [navigationActive, setNavigationActive] = useState(false);
   const [trafficEnabled, setTrafficEnabled] = useState(false);
   // Tap-to-navigate state
   const [pinDestination, setPinDestination] = useState<PinDestination | null>(null);
@@ -362,12 +364,11 @@ export default function NavigationMapClient() {
         geometry: alternatives[fastestIdx].geometry,
       });
       setAppState('routeActive');
-      // Auto-enable follow mode when navigation starts
-      setFollowMode(true);
-
+      // Show the whole route on the map — the user reviews it and explicitly
+      // taps "Start Route" (see handleStartNavigation) before we take over the
+      // camera, matching the search → calculate → review → start flow.
       if (mapRef.current) {
         mapRef.current.setAlternativeRoutes(alternatives, fastestIdx);
-        // Fit the map to show the entire route instead of panning to user location
         mapRef.current.fitRoute(alternatives[fastestIdx].geometry);
       }
     } catch (err) {
@@ -421,7 +422,6 @@ export default function NavigationMapClient() {
           geometry: alternatives[fastestIdx].geometry,
         });
         setAppState('routeActive');
-        setFollowMode(true);
 
         if (mapRef.current) {
           mapRef.current.setAlternativeRoutes(alternatives, fastestIdx);
@@ -466,12 +466,33 @@ export default function NavigationMapClient() {
     setErrorType(null);
     setPinDestination(null);
     setShowReplacePrompt(null);
+    setNavigationActive(false);
+    setFollowMode(false);
     if (mapRef.current) {
       mapRef.current.setDestinationMarker(null);
       mapRef.current.setPinMarker(null);
       mapRef.current.setRoute(null);
       mapRef.current.setAlternativeRoutes([], 0);
     }
+  }, []);
+
+  // Start Route: enters turn-by-turn Navigation Mode on top of the already-
+  // calculated route. Reuses the existing follow-camera machinery in
+  // MapCanvas (no second tracking/routing system) — navigationMode just tells
+  // it to use the closer, forward-biased, tilted nav camera instead of the
+  // plain recenter view.
+  const handleStartNavigation = useCallback(() => {
+    setNavigationActive(true);
+    setFollowMode(true);
+    if (mapRef.current) mapRef.current.locateUser();
+  }, []);
+
+  // Exit Navigation Mode: falls back to the plain route-overview view (route
+  // and alternatives stay exactly as calculated — nothing about the route
+  // itself changes, only the camera behavior).
+  const handleExitNavigation = useCallback(() => {
+    setNavigationActive(false);
+    setFollowMode(false);
   }, []);
 
   // Traffic toggle
@@ -558,15 +579,12 @@ export default function NavigationMapClient() {
       setSelectedDestination(pinResult);
       setAppState('routeActive');
       setPinDestination(null);
-      // Auto-enable follow mode when navigation starts
-      setFollowMode(true);
 
       if (mapRef.current) {
         mapRef.current.setPinMarker(null);
         mapRef.current.setDestinationMarker(pinDestination.coordinates);
         mapRef.current.setAlternativeRoutes(alternatives, fastestIdx);
-        // Center on current GPS location immediately after navigation starts
-        mapRef.current.locateUser();
+        mapRef.current.fitRoute(alternatives[fastestIdx].geometry);
       }
     } catch (err) {
       console.error('[pin-route] Error:', err);
@@ -705,12 +723,15 @@ export default function NavigationMapClient() {
     routeAlternatives.length === 0;
 
   const showRouteAlternatives =
-    appState === 'routeActive' && routeAlternatives.length > 0 && selectedDestination;
+    appState === 'routeActive' && routeAlternatives.length > 0 && selectedDestination && !navigationActive;
+
+  const showNavigationHud =
+    navigationActive && appState === 'routeActive' && !!selectedDestination;
 
   // Bottom sheets (destination/route/pin cards) are anchored bottom-left and
   // would overlap the brand/settings/help cluster, so hide it while one is open.
   const hideBottomLeftChrome =
-    showBottomPanel || showRouteAlternatives || !!pinDestination || !!showReplacePrompt;
+    showBottomPanel || showRouteAlternatives || showNavigationHud || !!pinDestination || !!showReplacePrompt;
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-background no-select">
@@ -726,6 +747,7 @@ export default function NavigationMapClient() {
           onLocationError={handleLocationError}
           onZoomChange={setMapZoom}
           followMode={followMode}
+          navigationMode={navigationActive}
           onFollowDisabled={handleFollowDisabled}
           onMapTap={handleMapTap}
           onOffRoute={handleOffRoute}
@@ -872,7 +894,25 @@ export default function NavigationMapClient() {
             t={t}
             onSelectRoute={handleSelectRoute}
             onClear={handleClearDestination}
+            onStartNavigation={handleStartNavigation}
             destinationName={selectedDestination!.name}
+          />
+        </div>
+      )}
+
+      {/* Navigation Mode HUD — small, always visible, never covers the map */}
+      {showNavigationHud && (
+        <div
+          className="fixed left-3 sm:left-4 bottom-4 z-panel"
+          style={{ maxWidth: 'min(360px, calc(100vw - 32px))' }}
+          data-no-map-tap
+        >
+          <NavigationHUD
+            destinationName={selectedDestination!.name}
+            routeInfo={routeInfo}
+            language={language}
+            t={t}
+            onExit={handleExitNavigation}
           />
         </div>
       )}

@@ -73,6 +73,9 @@ export interface Translations {
   // Map controls (collapsible secondary controls panel)
   mapControls: string;
   language: string;
+  // Navigation mode
+  startRoute: string;
+  exitNavigation: string;
 }
 
 export const translations: Record<Language, Translations> = {
@@ -144,6 +147,8 @@ export const translations: Record<Language, Translations> = {
     helpText: 'მოძებნეთ მისამართი ზემოთ და დააჭირეთ მარშრუტს ნავიგაციის დასაწყებად. გამოიყენეთ ღილაკები ეკრანის კიდეებზე რუკის მართვისთვის.',
     mapControls: 'რუკის მართვა',
     language: 'ენა',
+    startRoute: 'მარშრუტის დაწყება',
+    exitNavigation: 'ნავიგაციის დასრულება',
   },
   en: {
     appName: 'GeoNav',
@@ -213,6 +218,8 @@ export const translations: Record<Language, Translations> = {
     helpText: 'Search an address above and tap a route to start navigating. Use the buttons on the edges of the screen to control the map.',
     mapControls: 'Map Controls',
     language: 'Language',
+    startRoute: 'Start Route',
+    exitNavigation: 'Exit Navigation',
   },
 };
 

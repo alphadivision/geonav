@@ -14,6 +14,7 @@ import {
   GEORGIA_CENTER,
   calculateBearing,
   haversineDistance,
+  destinationPoint,
 } from '@/lib/mapbox';
 import { watchPosition, clearWatch } from '@/lib/geolocation';
 
@@ -21,7 +22,10 @@ import { watchPosition, clearWatch } from '@/lib/geolocation';
 declare const google: typeof globalThis.google;
 
 const MIN_MOVEMENT_FOR_BEARING = 3;
-const NAV_ZOOM = 16;
+const NAV_ZOOM = 16; // plain "recenter" zoom (no navigation mode)
+const NAV_MODE_ZOOM = 18; // closer, more immersive zoom while actively navigating
+const NAV_MODE_TILT = 45; // requested where the renderer supports it (see MapCanvas notes)
+const NAV_MODE_LOOKAHEAD_M = 55; // how far ahead of the user to bias the camera center
 
 // Continuous per-frame interpolation (runs every animation frame, independent
 // of how often GPS actually reports a new fix) — this is what makes the arrow
@@ -161,6 +165,11 @@ interface MapCanvasProps {
   onFollowDisabled: () => void;
   onMapTap?: (coords: [number, number]) => void;
   onOffRoute?: () => void;
+  /** Turn-by-turn navigation camera: closer zoom, forward-biased center so the
+   * user renders lower on screen, heading-locked rotation, and (where the
+   * renderer supports it) a tilted perspective. Only takes effect while
+   * followMode is also true. */
+  navigationMode?: boolean;
 }
 
 export interface MapCanvasHandle {
@@ -195,6 +204,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       onFollowDisabled,
       onMapTap,
       onOffRoute,
+      navigationMode = false,
     },
     ref
   ) => {
@@ -227,9 +237,10 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const currentHeadingRef = useRef<number>(0);
     const cameraHeadingRef = useRef<number>(0);
     const animationFrameRef = useRef<number | null>(null);
-    const lastCameraStateRef = useRef<{ lat: number; lng: number; heading: number } | null>(null);
+    const lastCameraStateRef = useRef<{ lat: number; lng: number; heading: number; zoom: number } | null>(null);
     const currentStyleRef = useRef<MapStyle>(mapStyle);
     const followModeRef = useRef(followMode);
+    const navigationModeRef = useRef(navigationMode);
     const onFollowDisabledRef = useRef(onFollowDisabled);
     const trafficEnabledRef = useRef(trafficEnabled);
     const onMapTapRef = useRef(onMapTap);
@@ -243,6 +254,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
     // Keep refs in sync with props
     followModeRef.current = followMode;
+    navigationModeRef.current = navigationMode;
     onFollowDisabledRef.current = onFollowDisabled;
     trafficEnabledRef.current = trafficEnabled;
     onMapTapRef.current = onMapTap;
@@ -345,17 +357,29 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         accuracyCircleRef.current?.setCenter({ lat: nextPosition[1], lng: nextPosition[0] });
 
         if (followModeRef.current) {
+          const navMode = navigationModeRef.current;
+          const zoom = navMode ? NAV_MODE_ZOOM : NAV_ZOOM;
+          // In navigation mode, bias the camera center ahead of the user along
+          // their heading — since moveCamera has no native "padding" concept,
+          // this is how we get the user/arrow to render lower on screen with
+          // the road and destination visible ahead, like a real nav app.
+          const center = navMode
+            ? destinationPoint(nextPosition, cameraHeadingRef.current, NAV_MODE_LOOKAHEAD_M)
+            : nextPosition;
+          const tilt = navMode ? NAV_MODE_TILT : 0;
+
           const last = lastCameraStateRef.current;
-          const moved = !last || haversineDistance([last.lng, last.lat], nextPosition) > CAMERA_MOVE_THRESHOLD_M;
+          const moved = !last || haversineDistance([last.lng, last.lat], center) > CAMERA_MOVE_THRESHOLD_M;
           const turned = !last || Math.abs(angleDiff(last.heading, cameraHeadingRef.current)) > CAMERA_HEADING_THRESHOLD_DEG;
-          if (moved || turned) {
+          const zoomChanged = !last || last.zoom !== zoom;
+          if (moved || turned || zoomChanged) {
             map.moveCamera({
-              center: { lat: nextPosition[1], lng: nextPosition[0] },
+              center: { lat: center[1], lng: center[0] },
               heading: cameraHeadingRef.current,
-              zoom: NAV_ZOOM,
-              tilt: 0,
+              zoom,
+              tilt,
             });
-            lastCameraStateRef.current = { lat: nextPosition[1], lng: nextPosition[0], heading: cameraHeadingRef.current };
+            lastCameraStateRef.current = { lat: center[1], lng: center[0], heading: cameraHeadingRef.current, zoom };
           }
         }
       }

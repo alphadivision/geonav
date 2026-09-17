@@ -14,6 +14,7 @@ interface RouteAlternativesPanelProps {
   t: Translations;
   onSelectRoute: (index: number) => void;
   onClear: () => void;
+  onStartNavigation: () => void;
   destinationName: string;
 }
 
@@ -40,6 +41,7 @@ export default function RouteAlternativesPanel({
   t,
   onSelectRoute,
   onClear,
+  onStartNavigation,
   destinationName,
 }: RouteAlternativesPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -84,6 +86,14 @@ export default function RouteAlternativesPanel({
             </p>
           </div>
           <ChevronUp size={18} className="flex-shrink-0 text-muted-foreground" />
+          <button
+            onClick={(e) => { e.stopPropagation(); onStartNavigation(); }}
+            className="flex-shrink-0 flex items-center gap-1.5 px-3 h-8 rounded-lg bg-primary text-primary-foreground text-xs font-bold active:scale-95 transition-transform"
+            aria-label={t.startRoute}
+          >
+            <Navigation size={13} />
+            {t.startRoute}
+          </button>
           <button
             onClick={(e) => { e.stopPropagation(); onClear(); }}
             className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-muted-foreground hover:text-white hover:bg-white/10 transition-colors active:scale-95"
@@ -176,6 +186,15 @@ export default function RouteAlternativesPanel({
             );
           })}
         </div>
+
+        {/* Start Route — enters live turn-by-turn Navigation Mode */}
+        <button
+          onClick={onStartNavigation}
+          className="w-full mt-3 flex items-center justify-center gap-2 py-3 rounded-xl bg-primary text-primary-foreground font-bold text-sm shadow-lg shadow-primary/30 hover:bg-primary/90 active:scale-[0.98] transition-all"
+        >
+          <Navigation size={17} />
+          {t.startRoute}
+        </button>
       </div>
     </div>
   );

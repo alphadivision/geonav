@@ -69,3 +69,36 @@ export function smoothHeading(prev: number, next: number, alpha: number): number
   if (diff < -180) diff += 360;
   return (prev + alpha * diff + 360) % 360;
 }
+
+/**
+ * Project a point forward from `from` along `bearingDeg` by `distanceMeters`.
+ * Used to bias the navigation camera's center ahead of the user (so their
+ * marker renders lower on screen and more of the road ahead is visible),
+ * since the Google Maps JS API has no native "camera padding" like some
+ * native map SDKs do.
+ */
+export function destinationPoint(
+  from: [number, number],
+  bearingDeg: number,
+  distanceMeters: number
+): [number, number] {
+  const R = 6371000;
+  const [lng1, lat1] = from;
+  const lat1Rad = (lat1 * Math.PI) / 180;
+  const lng1Rad = (lng1 * Math.PI) / 180;
+  const bearingRad = (bearingDeg * Math.PI) / 180;
+  const angularDist = distanceMeters / R;
+
+  const lat2Rad = Math.asin(
+    Math.sin(lat1Rad) * Math.cos(angularDist) +
+      Math.cos(lat1Rad) * Math.sin(angularDist) * Math.cos(bearingRad)
+  );
+  const lng2Rad =
+    lng1Rad +
+    Math.atan2(
+      Math.sin(bearingRad) * Math.sin(angularDist) * Math.cos(lat1Rad),
+      Math.cos(angularDist) - Math.sin(lat1Rad) * Math.sin(lat2Rad)
+    );
+
+  return [(lng2Rad * 180) / Math.PI, (lat2Rad * 180) / Math.PI];
+}
