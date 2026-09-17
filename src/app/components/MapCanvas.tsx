@@ -137,7 +137,38 @@ const MAP_BACKGROUND_COLOR: Record<MapStyle, string> = {
 };
 
 // Dark mode styles for Google Maps — near-black, monochrome, minimal (matches TeslaNav brand style)
-const DARK_STYLES: Array<{ elementType?: string; featureType?: string; stylers: Array<Record<string, string>>; }> = [
+// Exhaustive POI/transit hiding — the bare parent featureType ('poi',
+// 'transit') is documented to cascade to every subtype in the classic JS
+// styles array, but Cloud-based map styling has been reported (Google's own
+// issue tracker, community reports) to not always cascade the same way. So
+// every documented subtype is listed explicitly here too, belt-and-suspenders:
+// this is the array applied both as the classic raster `styles` option AND
+// as the corrective fallback (see applyPoiVisibilityFallback) if a vector
+// map with a Map ID silently falls back to raster, where Cloud styling no
+// longer applies at all. Never touches colors/hierarchy — visibility only.
+const POI_HIDDEN_STYLES: Array<{ elementType?: string; featureType?: string; stylers: Array<Record<string, string>>; }> = [
+  { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.attraction', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.business', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.government', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.medical', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.park', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.place_of_worship', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.school', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.sports_complex', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit.line', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit.station', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit.station.airport', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit.station.bus', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit.station.rail', stylers: [{ visibility: 'off' }] },
+];
+
+// Colors/hierarchy only — no POI/transit visibility rules — kept separate
+// from POI_HIDDEN_STYLES so the "Places ON" raster-fallback case can reuse
+// the exact same visual design without the hiding rules (see
+// MAP_STYLES_CONFIG_POI_VISIBLE below). Never changed by the POI fix.
+const DARK_BASE_STYLES: Array<{ elementType?: string; featureType?: string; stylers: Array<Record<string, string>>; }> = [
   { elementType: 'geometry', stylers: [{ color: '#0a0a0a' }] },
   { elementType: 'labels.text.fill', stylers: [{ color: '#6b6b6b' }] },
   { elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0a' }] },
@@ -147,8 +178,6 @@ const DARK_STYLES: Array<{ elementType?: string; featureType?: string; stylers: 
   { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#0a0a0a' }] },
   { featureType: 'landscape.man_made', elementType: 'geometry.stroke', stylers: [{ color: '#232323' }] },
   { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#0c0c0c' }] },
-  // Hide POI icons/labels entirely — keeps the map clean and uncluttered
-  { featureType: 'poi', stylers: [{ visibility: 'off' }] },
   { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#2a2a2a' }] },
   { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#6b6b6b' }] },
   { featureType: 'road', elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0a' }] },
@@ -158,25 +187,62 @@ const DARK_STYLES: Array<{ elementType?: string; featureType?: string; stylers: 
   { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#8c8c8c' }] },
   { featureType: 'road.highway', elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0a' }] },
   { featureType: 'road.local', elementType: 'geometry', stylers: [{ color: '#202020' }] },
-  // Hide transit lines/station icons — not useful for driving navigation and adds clutter
-  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
   { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#050505' }] },
   { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#3a3a3a' }] },
 ];
+const DARK_STYLES = [...DARK_BASE_STYLES, ...POI_HIDDEN_STYLES];
 
-const STANDARD_STYLES: Array<{ elementType?: string; featureType?: string; stylers: Array<Record<string, string>>; }> = [];
+// Was an empty array (plain default Google look) — stays empty as the base;
+// POI hiding is layered on top the same way as dark.
+const STANDARD_BASE_STYLES: Array<{ elementType?: string; featureType?: string; stylers: Array<Record<string, string>>; }> = [];
+const STANDARD_STYLES = [...STANDARD_BASE_STYLES, ...POI_HIDDEN_STYLES];
 
 const STREETS_STYLES: Array<{ elementType?: string; featureType?: string; stylers: Array<Record<string, string>>; }> = [
   { featureType: 'poi', stylers: [{ visibility: 'simplified' }] },
   { featureType: 'transit', stylers: [{ visibility: 'simplified' }] },
 ];
 
+// Default (Places OFF): POIs hidden, per style's normal design.
 const MAP_STYLES_CONFIG: Record<MapStyle, Array<{ elementType?: string; featureType?: string; stylers: Array<Record<string, string>>; }>> = {
   dark: DARK_STYLES,
   standard: STANDARD_STYLES,
   satellite: [],
   streets: STREETS_STYLES,
 };
+
+// Places ON: same visual design, POI/transit hiding rules simply omitted so
+// Google's native POIs render normally. Only used by the raster-fallback
+// corrective path (applyPoiVisibilityFallback) — on working vector
+// rendering, "Places ON" is handled by switching to the POI Map ID instead.
+const MAP_STYLES_CONFIG_POI_VISIBLE: Record<MapStyle, Array<{ elementType?: string; featureType?: string; stylers: Array<Record<string, string>>; }>> = {
+  dark: DARK_BASE_STYLES,
+  standard: STANDARD_BASE_STYLES,
+  satellite: [],
+  streets: [],
+};
+
+// Cloud Console's Map-ID-associated style (dark/light + POI on/off) only
+// ever applies while the map is ACTUALLY rendering as vector — confirmed via
+// Google's own console warning ("Attempted to load a Vector Map, but failed.
+// Falling back to Raster") that this can happen silently even with a valid
+// Map ID and API key, depending on the browser/GPU's WebGL support. When
+// that fallback occurs, the Map ID technically stays assigned to the map
+// instance, but the Cloud-configured POI visibility no longer applies —
+// Google just renders its own default (POI-visible) raster tiles. The
+// classic `styles` option is normally rejected outright whenever `mapId` is
+// present, but that rule exists specifically to protect Cloud-based styling
+// on vector rendering; once we're already degraded to plain raster, this
+// re-applies our own known-correct style (including exhaustive POI hiding)
+// as the only remaining lever, so Places OFF still reliably hides POIs even
+// in the fallback case. No-op (and harmless) if the map is actually
+// rendering as vector — Cloud styling is left in full control there.
+function applyPoiVisibilityFallback(map: google.maps.Map, style: MapStyle, placesEnabled: boolean) {
+  if (!USE_VECTOR_MAP) return; // no Map ID at all — normal raster styling path already handles this
+  const renderingType = map.getRenderingType ? map.getRenderingType() : undefined;
+  if (renderingType !== google.maps.RenderingType.RASTER) return;
+  const styles = placesEnabled ? MAP_STYLES_CONFIG_POI_VISIBLE[style] : MAP_STYLES_CONFIG[style];
+  map.setOptions({ styles });
+}
 
 // Vehicle/location marker asset (provided PNG, tip pointing up/north by
 // design — a CSS rotate(heading deg) therefore maps directly to compass
@@ -665,6 +731,15 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     // mount effect so recreateMapForStyle (below) can re-register them on a
     // freshly-created map instance without duplicating this code.
     const attachMapListeners = useCallback((map: google.maps.Map) => {
+      // Vector rendering can fall back to raster asynchronously, after the
+      // map is already constructed — this is the only reliable way to catch
+      // that and apply the POI-visibility corrective fallback (see
+      // applyPoiVisibilityFallback) the moment it actually happens, not just
+      // once at creation time.
+      map.addListener('renderingtype_changed', () => {
+        applyPoiVisibilityFallback(map, currentStyleRef.current, placesEnabledRef.current);
+      });
+
       map.addListener('zoom_changed', () => {
         onZoomChange(Math.round(map.getZoom() ?? 12));
         isZoomingRef.current = true;
@@ -805,6 +880,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       userArrowMarkerRef.current?.setMap(newMap);
 
       attachMapListeners(newMap);
+      applyPoiVisibilityFallback(newMap, style, placesEnabledRef.current);
 
       mapRef.current = newMap;
       currentStyleRef.current = style;
@@ -1167,6 +1243,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         }
 
         attachMapListeners(map);
+        applyPoiVisibilityFallback(map, mapStyle, placesEnabledRef.current);
 
         isMapReadyRef.current = true;
         onMapReady();
