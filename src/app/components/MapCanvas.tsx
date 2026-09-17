@@ -65,6 +65,16 @@ const LONG_PRESS_DURATION_MS = 1500;
 const LONG_PRESS_MOVE_CANCEL_PX = 8;
 
 
+// Google's vector-map "color scheme" (dark/light cloud-configured style
+// variant for the SAME Map ID — see the setup notes near GOOGLE_MAPS_MAP_ID
+// below). Only meaningful on a vector map; ignored otherwise.
+const MAP_COLOR_SCHEME: Record<MapStyle, 'DARK' | 'LIGHT'> = {
+  dark: 'DARK',
+  standard: 'LIGHT',
+  satellite: 'LIGHT',
+  streets: 'LIGHT',
+};
+
 // Google Maps map type IDs mapped to our MapStyle keys
 const GOOGLE_MAP_TYPE: Record<MapStyle, string> = {
   dark: 'roadmap',
@@ -77,16 +87,23 @@ const GOOGLE_MAP_TYPE: Record<MapStyle, string> = {
 // confirmed against Google's own documentation: classic raster tiles do not
 // visually rotate via moveCamera({heading}), regardless of how correctly the
 // heading value itself is computed. Vector rendering requires a Map ID
-// (created in Google Cloud Console — this can't be done from code). Without
-// one configured, we stay on raster (current behavior, no rotation) rather
-// than silently watermarking a production deploy with Google's DEMO_MAP_ID.
+// (created in Google Cloud Console — this can't be done from code).
 //
 // IMPORTANT: a Map ID and the `styles` array are mutually exclusive — Google
-// ignores `styles` whenever a mapId is set, and expects styling to be
-// configured against that Map ID in Cloud Console instead (Cloud-based
-// styling accepts the exact same JSON style-rule format as DARK_STYLES
-// below, so it can be pasted in as-is). See the setup notes in the summary
-// this task ends with.
+// ignores `styles` whenever a mapId is set. Vector-map custom appearance is
+// instead controlled two ways, BOTH configured against this Map ID in Cloud
+// Console (Maps Platform > Map Management > this Map ID > Map Styles),
+// neither of which is achievable from application code:
+//   1. Author a "dark mode" and a "light mode" style for this Map ID using
+//      Cloud Console's style editor (or the Styling Wizard at
+//      mapstyle.withgoogle.com) — paste in the exact same styler rules as
+//      DARK_STYLES / STANDARD_STYLES below so the vector map matches the
+//      previous custom raster design instead of Google's generic default.
+//   2. The app then picks which of those two authored styles is active via
+//      the standard `colorScheme` MapOptions field (see MAP_COLOR_SCHEME
+//      and recreateMapForStyle below) — 'DARK' or 'LIGHT'.
+// Without a Map ID configured, none of this applies and the app stays on
+// raster (no rotation), styled via the JS `styles` array as before.
 const GOOGLE_MAPS_MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID || undefined;
 const USE_VECTOR_MAP = !!GOOGLE_MAPS_MAP_ID;
 
@@ -622,18 +639,166 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       }
     }, []);
 
+    // All the map-level event listeners the app needs, factored out of the
+    // mount effect so recreateMapForStyle (below) can re-register them on a
+    // freshly-created map instance without duplicating this code.
+    const attachMapListeners = useCallback((map: google.maps.Map) => {
+      map.addListener('zoom_changed', () => {
+        onZoomChange(Math.round(map.getZoom() ?? 12));
+        isZoomingRef.current = true;
+        if (zoomTimeoutRef.current) clearTimeout(zoomTimeoutRef.current);
+        zoomTimeoutRef.current = setTimeout(() => {
+          isZoomingRef.current = false;
+        }, 300);
+      });
+
+      map.addListener('dragstart', () => {
+        if (longPressTimerRef.current) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+        }
+        if (!isZoomingRef.current) {
+          isDraggingRef.current = true;
+          if (followModeRef.current) {
+            onFollowDisabledRef.current();
+          }
+        }
+      });
+
+      map.addListener('dragend', () => {
+        setTimeout(() => {
+          isDraggingRef.current = false;
+        }, 100);
+      });
+
+      map.addListener('mousedown', (e: google.maps.MapMouseEvent) => {
+        if (longPressTimerRef.current) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+        }
+
+        const domE = e.domEvent as (MouseEvent | TouchEvent) | undefined;
+        if (domE) {
+          const pos = 'touches' in domE
+            ? { x: (domE as TouchEvent).touches[0].clientX, y: (domE as TouchEvent).touches[0].clientY }
+            : { x: (domE as MouseEvent).clientX, y: (domE as MouseEvent).clientY };
+          dragStartPosRef.current = pos;
+
+          const target = domE.target as HTMLElement;
+          if (target && target.closest('[data-no-map-tap]')) return;
+        }
+
+        if (!onMapTapRef.current || !e.latLng) return;
+        const coords: [number, number] = [e.latLng.lng(), e.latLng.lat()];
+        longPressTimerRef.current = setTimeout(() => {
+          longPressTimerRef.current = null;
+          onMapTapRef.current?.(coords);
+        }, LONG_PRESS_DURATION_MS);
+      });
+
+      map.addListener('mousemove', (e: google.maps.MapMouseEvent) => {
+        if (!longPressTimerRef.current) return;
+        const domE = e.domEvent as (MouseEvent | TouchEvent) | undefined;
+        const start = dragStartPosRef.current;
+        if (!domE || !start) return;
+        const point = 'touches' in domE
+          ? (domE as TouchEvent).touches[0]
+          : (domE as MouseEvent);
+        if (!point) return;
+        const dx = Math.abs(point.clientX - start.x);
+        const dy = Math.abs(point.clientY - start.y);
+        if (dx > LONG_PRESS_MOVE_CANCEL_PX || dy > LONG_PRESS_MOVE_CANCEL_PX) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+        }
+      });
+
+      map.addListener('mouseup', () => {
+        if (longPressTimerRef.current) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+        }
+      });
+    }, [onZoomChange]);
+
+    // Vector maps can't change their `colorScheme` after creation (Google's
+    // documented behavior — setOptions has no effect on it post-init), so a
+    // real Dark/Light toggle on a vector map requires recreating the
+    // google.maps.Map instance itself with the new colorScheme. This does
+    // NOT touch any of the app's own state/overlays: every existing
+    // polyline/marker/overlay is just re-attached (.setMap(newMap)) rather
+    // than recreated, and the previous camera position/heading/tilt is
+    // preserved so the switch doesn't visually reset the view.
+    const recreateMapForStyle = useCallback((style: MapStyle) => {
+      const oldMap = mapRef.current;
+      if (!oldMap || !containerRef.current) return;
+
+      const center = oldMap.getCenter();
+      const zoom = oldMap.getZoom() ?? NAV_ZOOM;
+      const tilt = navigationModeRef.current ? NAV_MODE_TILT : 0;
+
+      google.maps.event.clearInstanceListeners(oldMap);
+
+      const newMap = new google.maps.Map(containerRef.current, {
+        center: center ? { lat: center.lat(), lng: center.lng() } : { lat: GEORGIA_CENTER[1], lng: GEORGIA_CENTER[0] },
+        zoom,
+        heading: cameraHeadingRef.current,
+        tilt,
+        minZoom: 3,
+        maxZoom: 20,
+        mapTypeId: GOOGLE_MAP_TYPE[style],
+        mapId: GOOGLE_MAPS_MAP_ID,
+        colorScheme: MAP_COLOR_SCHEME[style],
+        backgroundColor: MAP_BACKGROUND_COLOR[style],
+        disableDefaultUI: true,
+        gestureHandling: 'greedy',
+        clickableIcons: false,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: false,
+        zoomControl: false,
+        scaleControl: false,
+        rotateControl: false,
+        headingInteractionEnabled: false,
+        tiltInteractionEnabled: false,
+      } as google.maps.MapOptions);
+
+      // Re-attach every existing overlay to the new map instance — nothing
+      // here is recreated, just repointed.
+      mainRouteCasingRef.current?.setMap(newMap);
+      mainRouteSegmentPolylinesRef.current.forEach((poly) => poly.setMap(newMap));
+      altRoutePolylinesRef.current.forEach(({ casing, line }) => {
+        casing.setMap(newMap);
+        line.setMap(newMap);
+      });
+      if (trafficEnabledRef.current) {
+        trafficLayerRef.current?.setMap(newMap);
+      }
+      destinationMarkerRef.current?.setMap(newMap);
+      pinMarkerRef.current?.setMap(newMap);
+      userArrowMarkerRef.current?.setMap(newMap);
+
+      attachMapListeners(newMap);
+
+      mapRef.current = newMap;
+      currentStyleRef.current = style;
+      // Force the next animateFrame tick to resync the camera against the
+      // new map instance rather than assuming it already matches.
+      lastCameraStateRef.current = null;
+    }, [attachMapListeners]);
+
     const applyMapStyleToMap = useCallback((style: MapStyle) => {
-      let map = mapRef.current;
+      const map = mapRef.current;
       if (!map) return;
+      if (USE_VECTOR_MAP) {
+        recreateMapForStyle(style);
+        return;
+      }
       map.setMapTypeId(GOOGLE_MAP_TYPE[style]);
       map.setOptions({ backgroundColor: MAP_BACKGROUND_COLOR[style] });
-      // With a Map ID set, styling is controlled from Cloud Console, not the
-      // JS `styles` array (Google ignores it either way) — skip sending it.
-      if (!USE_VECTOR_MAP) {
-        map.setOptions({ styles: style !== 'satellite' ? MAP_STYLES_CONFIG[style] : [] });
-      }
+      map.setOptions({ styles: style !== 'satellite' ? MAP_STYLES_CONFIG[style] : [] });
       currentStyleRef.current = style;
-    }, []);
+    }, [recreateMapForStyle]);
 
     // Moves the user marker overlay and updates its CSS rotation. Called every
     // animation frame with the continuously-interpolated position/heading
@@ -880,9 +1045,13 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           maxZoom: 20,
           mapTypeId: GOOGLE_MAP_TYPE[mapStyle],
           // styles and mapId are mutually exclusive (Google ignores `styles`
-          // whenever mapId is set) — only send one or the other.
+          // whenever mapId is set) — only send one or the other. colorScheme
+          // picks between the Cloud Console-authored dark/light style
+          // variants for this Map ID (see MAP_COLOR_SCHEME above); it can
+          // only be set here, at creation — recreateMapForStyle is what
+          // lets the Dark/Light toggle change it after the fact.
           ...(USE_VECTOR_MAP
-            ? { mapId: GOOGLE_MAPS_MAP_ID }
+            ? { mapId: GOOGLE_MAPS_MAP_ID, colorScheme: MAP_COLOR_SCHEME[mapStyle] }
             : { styles: MAP_STYLES_CONFIG[mapStyle] }),
           backgroundColor: MAP_BACKGROUND_COLOR[mapStyle],
           disableDefaultUI: true,
@@ -957,93 +1126,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           applyTrafficVisibility(true);
         }
 
-        // Single zoom_changed listener (was two identical subscriptions)
-        map.addListener('zoom_changed', () => {
-          onZoomChange(Math.round(map.getZoom() ?? 12));
-          isZoomingRef.current = true;
-          if (zoomTimeoutRef.current) clearTimeout(zoomTimeoutRef.current);
-          zoomTimeoutRef.current = setTimeout(() => {
-            isZoomingRef.current = false;
-          }, 300);
-        });
-
-        // Drag detection — disable follow mode on manual pan, and cancel any
-        // pending long-press pin placement (real dragging means the user is
-        // panning, not holding in place to drop a pin).
-        map.addListener('dragstart', () => {
-          if (longPressTimerRef.current) {
-            clearTimeout(longPressTimerRef.current);
-            longPressTimerRef.current = null;
-          }
-          if (!isZoomingRef.current) {
-            isDraggingRef.current = true;
-            if (followModeRef.current) {
-              onFollowDisabledRef.current();
-            }
-          }
-        });
-
-        map.addListener('dragend', () => {
-          setTimeout(() => {
-            isDraggingRef.current = false;
-          }, 100);
-        });
-
-        // Pin placement is a press-and-hold (LONG_PRESS_DURATION_MS), not a
-        // quick tap: mousedown starts a timer capturing the press location;
-        // mouseup before the timer fires cancels it (no pin); moving the
-        // pointer more than LONG_PRESS_MOVE_CANCEL_PX, or an actual map drag
-        // starting, also cancels it. Only if the timer runs all the way
-        // down uninterrupted does it call onMapTap — a plain quick click no
-        // longer creates a pin at all.
-        map.addListener('mousedown', (e: google.maps.MapMouseEvent) => {
-          if (longPressTimerRef.current) {
-            clearTimeout(longPressTimerRef.current);
-            longPressTimerRef.current = null;
-          }
-
-          const domE = e.domEvent as (MouseEvent | TouchEvent) | undefined;
-          if (domE) {
-            const pos = 'touches' in domE
-              ? { x: (domE as TouchEvent).touches[0].clientX, y: (domE as TouchEvent).touches[0].clientY }
-              : { x: (domE as MouseEvent).clientX, y: (domE as MouseEvent).clientY };
-            dragStartPosRef.current = pos;
-
-            const target = domE.target as HTMLElement;
-            if (target && target.closest('[data-no-map-tap]')) return;
-          }
-
-          if (!onMapTapRef.current || !e.latLng) return;
-          const coords: [number, number] = [e.latLng.lng(), e.latLng.lat()];
-          longPressTimerRef.current = setTimeout(() => {
-            longPressTimerRef.current = null;
-            onMapTapRef.current?.(coords);
-          }, LONG_PRESS_DURATION_MS);
-        });
-
-        map.addListener('mousemove', (e: google.maps.MapMouseEvent) => {
-          if (!longPressTimerRef.current) return;
-          const domE = e.domEvent as (MouseEvent | TouchEvent) | undefined;
-          const start = dragStartPosRef.current;
-          if (!domE || !start) return;
-          const point = 'touches' in domE
-            ? (domE as TouchEvent).touches[0]
-            : (domE as MouseEvent);
-          if (!point) return;
-          const dx = Math.abs(point.clientX - start.x);
-          const dy = Math.abs(point.clientY - start.y);
-          if (dx > LONG_PRESS_MOVE_CANCEL_PX || dy > LONG_PRESS_MOVE_CANCEL_PX) {
-            clearTimeout(longPressTimerRef.current);
-            longPressTimerRef.current = null;
-          }
-        });
-
-        map.addListener('mouseup', () => {
-          if (longPressTimerRef.current) {
-            clearTimeout(longPressTimerRef.current);
-            longPressTimerRef.current = null;
-          }
-        });
+        attachMapListeners(map);
 
         isMapReadyRef.current = true;
         onMapReady();
