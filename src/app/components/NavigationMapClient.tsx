@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 
 import type { Language } from '@/lib/i18n';
 import type { MapStyle } from '@/types';
-import { getStoredLanguage, setStoredLanguage, getTranslations, TRAFFIC_KEY } from '@/lib/i18n';
+import { getStoredLanguage, setStoredLanguage, getTranslations, TRAFFIC_KEY, PLACES_KEY } from '@/lib/i18n';
 import { getCurrentPosition } from '@/lib/geolocation';
 import { getPerformanceMode, applyPerformanceModeToDocument } from '@/lib/performanceMode';
 import type {
@@ -178,6 +178,10 @@ export default function NavigationMapClient() {
   // letter actually changes — see MapCanvas's onHeadingChange contract.
   const [compassLabel, setCompassLabel] = useState<CompassLabel>('N');
   const [trafficEnabled, setTrafficEnabled] = useState(false);
+  // Native map POI (places) visibility — default OFF. Toggling this
+  // recreates the underlying vector map with a different Map ID (see
+  // MapCanvas), the same mechanism already used for the Dark/Light toggle.
+  const [placesEnabled, setPlacesEnabled] = useState(false);
   // Tap-to-navigate state
   const [pinDestination, setPinDestination] = useState<PinDestination | null>(null);
   const [isPinCalculating, setIsPinCalculating] = useState(false);
@@ -205,6 +209,9 @@ export default function NavigationMapClient() {
     // Restore traffic preference
     const storedTraffic = localStorage.getItem(TRAFFIC_KEY);
     if (storedTraffic === 'true') setTrafficEnabled(true);
+    // Restore places preference
+    const storedPlaces = localStorage.getItem(PLACES_KEY);
+    if (storedPlaces === 'true') setPlacesEnabled(true);
 
     // Tesla / low-performance mode: sets data-perf-mode on <html> so CSS can
     // drop expensive backdrop-filter blur (see tailwind.css). Runs as early
@@ -560,6 +567,16 @@ export default function NavigationMapClient() {
     });
   }, []);
 
+  // Places (native map POI) toggle — flips which Map ID MapCanvas uses,
+  // triggering the same map-recreation path as the Dark/Light style toggle.
+  const handlePlacesToggle = useCallback(() => {
+    setPlacesEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem(PLACES_KEY, String(next));
+      return next;
+    });
+  }, []);
+
   // Tap-to-navigate: handle map tap
   const handleMapTap = useCallback(
     (coords: [number, number]) => {
@@ -811,6 +828,7 @@ export default function NavigationMapClient() {
           language={language}
           mapStyle={mapStyle}
           trafficEnabled={trafficEnabled}
+          placesEnabled={placesEnabled}
           onMapReady={handleMapReady}
           onUserLocationUpdate={handleUserLocationUpdate}
           onLocationError={handleLocationError}
@@ -863,6 +881,8 @@ export default function NavigationMapClient() {
           onStyleChange={handleMapStyleChange}
           trafficEnabled={trafficEnabled}
           onTrafficToggle={handleTrafficToggle}
+          placesEnabled={placesEnabled}
+          onPlacesToggle={handlePlacesToggle}
           t={t}
         />
         <ZoomControls

@@ -107,6 +107,22 @@ const GOOGLE_MAP_TYPE: Record<MapStyle, string> = {
 const GOOGLE_MAPS_MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID || undefined;
 const USE_VECTOR_MAP = !!GOOGLE_MAPS_MAP_ID;
 
+// "Show Places" (native map POI visibility) — same constraint as above:
+// there is no documented runtime JS API to toggle POI visibility on an
+// already-created vector map, only a per-Map-ID Cloud Console style setting.
+// So this is a SECOND Map ID, configured in Cloud Console with its own
+// dark+POI and light+POI style pair that otherwise matches the base Map ID's
+// design exactly. Toggling "Show Places" recreates the map (see
+// recreateMapForStyle) switching only which Map ID is active — never
+// touches the JS `styles` array, never queries the Places API, never
+// creates a marker per place. Optional: the app works identically to before
+// if this isn't set, just without the toggle having any visible effect.
+const GOOGLE_MAPS_MAP_ID_POI = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID_POI || undefined;
+
+function resolveMapId(placesEnabled: boolean): string | undefined {
+  return placesEnabled && GOOGLE_MAPS_MAP_ID_POI ? GOOGLE_MAPS_MAP_ID_POI : GOOGLE_MAPS_MAP_ID;
+}
+
 // Google's Map `backgroundColor` option is what actually shows through
 // wherever tiles haven't loaded yet — at the map's edges while panning, when
 // zoomed out past the available tile set, etc. Left unset, it defaults to a
@@ -467,6 +483,9 @@ interface MapCanvasProps {
   language: Language;
   mapStyle: MapStyle;
   trafficEnabled: boolean;
+  /** Native map POI (places) visibility — see GOOGLE_MAPS_MAP_ID_POI /
+   * resolveMapId. Defaults to false (POIs off, the normal nav experience). */
+  placesEnabled?: boolean;
   onMapReady: () => void;
   onUserLocationUpdate: (location: UserLocation) => void;
   onLocationError: (type: 'denied' | 'unavailable') => void;
@@ -549,6 +568,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       language,
       mapStyle,
       trafficEnabled,
+      placesEnabled = false,
       onMapReady,
       onUserLocationUpdate,
       onLocationError,
@@ -600,6 +620,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const mapViewModeRef = useRef(mapViewMode);
     const onFollowDisabledRef = useRef(onFollowDisabled);
     const trafficEnabledRef = useRef(trafficEnabled);
+    const placesEnabledRef = useRef(placesEnabled);
     const onMapTapRef = useRef(onMapTap);
     const onOffRouteRef = useRef(onOffRoute);
     const onHeadingChangeRef = useRef(onHeadingChange);
@@ -620,6 +641,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     mapViewModeRef.current = mapViewMode;
     onFollowDisabledRef.current = onFollowDisabled;
     trafficEnabledRef.current = trafficEnabled;
+    placesEnabledRef.current = placesEnabled;
     onMapTapRef.current = onMapTap;
     onOffRouteRef.current = onOffRoute;
     onHeadingChangeRef.current = onHeadingChange;
@@ -729,6 +751,10 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     // polyline/marker/overlay is just re-attached (.setMap(newMap)) rather
     // than recreated, and the previous camera position/heading/tilt is
     // preserved so the switch doesn't visually reset the view.
+    //
+    // The same recreation also carries whichever Map ID is currently active
+    // (see resolveMapId) — so toggling "Show Places" uses this exact same
+    // path, just switching mapId instead of (or alongside) colorScheme.
     const recreateMapForStyle = useCallback((style: MapStyle) => {
       const oldMap = mapRef.current;
       if (!oldMap || !containerRef.current) return;
@@ -747,7 +773,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         minZoom: 3,
         maxZoom: 20,
         mapTypeId: GOOGLE_MAP_TYPE[style],
-        mapId: GOOGLE_MAPS_MAP_ID,
+        mapId: resolveMapId(placesEnabledRef.current),
         colorScheme: MAP_COLOR_SCHEME[style],
         backgroundColor: MAP_BACKGROUND_COLOR[style],
         disableDefaultUI: true,
@@ -999,6 +1025,17 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       }
     }, [mapStyle, applyMapStyleToMap]);
 
+    // "Show Places" changed — on a vector map this means a different Map ID
+    // is now active (see resolveMapId), which (like the Dark/Light toggle)
+    // requires recreating the map instance. No-op on raster (no Map ID at
+    // all) since there's nothing to recreate against.
+    useEffect(() => {
+      if (isMapReadyRef.current && USE_VECTOR_MAP) {
+        recreateMapForStyle(currentStyleRef.current);
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [placesEnabled, recreateMapForStyle]);
+
     useEffect(() => {
       if (isMapReadyRef.current) {
         applyTrafficVisibility(trafficEnabled);
@@ -1049,9 +1086,12 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           // picks between the Cloud Console-authored dark/light style
           // variants for this Map ID (see MAP_COLOR_SCHEME above); it can
           // only be set here, at creation — recreateMapForStyle is what
-          // lets the Dark/Light toggle change it after the fact.
+          // lets the Dark/Light toggle change it after the fact. mapId is
+          // resolved via resolveMapId so an initial placesEnabled=true
+          // (e.g. restored from localStorage before this effect ran) is
+          // honored from the very first paint, not just after a toggle.
           ...(USE_VECTOR_MAP
-            ? { mapId: GOOGLE_MAPS_MAP_ID, colorScheme: MAP_COLOR_SCHEME[mapStyle] }
+            ? { mapId: resolveMapId(placesEnabledRef.current), colorScheme: MAP_COLOR_SCHEME[mapStyle] }
             : { styles: MAP_STYLES_CONFIG[mapStyle] }),
           backgroundColor: MAP_BACKGROUND_COLOR[mapStyle],
           disableDefaultUI: true,
