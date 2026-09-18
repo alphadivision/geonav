@@ -4,6 +4,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { SlidersHorizontal, AlertTriangle, MapPin } from 'lucide-react';
 import type { MapStyle } from '@/types';
 import type { Language, Translations } from '@/lib/i18n';
+import { CURSOR_OPTIONS, type CursorId } from '@/lib/cursors';
 import AccountSection from './AccountSection';
 
 interface MapControlsPanelProps {
@@ -15,6 +16,8 @@ interface MapControlsPanelProps {
   onTrafficToggle: () => void;
   placesEnabled: boolean;
   onPlacesToggle: () => void;
+  currentCursorId: CursorId;
+  onCursorChange: (id: CursorId) => void;
   t: Translations;
 }
 
@@ -34,6 +37,13 @@ function getStyleLabel(key: MapStyle, t: Translations): string {
   }
 }
 
+function getCursorLabel(id: CursorId, t: Translations): string {
+  switch (id) {
+    case 'default': return t.cursorDefault;
+    case 'arrow3d': return t.cursor3dArrow;
+  }
+}
+
 // Secondary controls (language, map style, traffic, help) that aren't needed
 // every time — tucked behind one small toggle so the map stays uncluttered
 // by default, matching the clean reference layout.
@@ -46,6 +56,8 @@ export default function MapControlsPanel({
   onTrafficToggle,
   placesEnabled,
   onPlacesToggle,
+  currentCursorId,
+  onCursorChange,
   t,
 }: MapControlsPanelProps) {
   const [open, setOpen] = useState(false);
@@ -157,6 +169,33 @@ export default function MapControlsPanel({
                     title={getStyleLabel(key, t)}
                   >
                     <span className="text-base leading-none">{icon}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Cursor (selectable vehicle marker) */}
+          <div className="px-4 py-3 border-b border-white/10">
+            <div className="text-xs text-muted-foreground mb-2">{t.cursorStyle}</div>
+            <div className="grid grid-cols-4 gap-1.5">
+              {CURSOR_OPTIONS.map(({ id, assetUrl }) => {
+                const isActive = currentCursorId === id;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => onCursorChange(id)}
+                    className={[
+                      'flex flex-col items-center justify-center gap-0.5 rounded-lg py-2',
+                      'transition-colors',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
+                      isActive ? 'bg-primary/15 text-primary' : 'hover:bg-white/5 text-muted-foreground',
+                    ].join(' ')}
+                    aria-pressed={isActive}
+                    title={getCursorLabel(id, t)}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={assetUrl} alt="" className="w-5 h-5 object-contain" />
                   </button>
                 );
               })}

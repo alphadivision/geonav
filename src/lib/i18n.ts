@@ -50,6 +50,10 @@ export interface Translations {
   traffic: string;
   // Places (map POI visibility toggle)
   showPlaces: string;
+  // Cursor (selectable vehicle marker)
+  cursorStyle: string;
+  cursorDefault: string;
+  cursor3dArrow: string;
   // Routes
   routes: string;
   fastest: string;
@@ -137,6 +141,10 @@ export const translations: Record<Language, Translations> = {
     traffic: 'ტრეფიკი',
     // Places (map POI visibility toggle)
     showPlaces: 'ადგილები',
+    // Cursor (selectable vehicle marker)
+    cursorStyle: 'კურსორი',
+    cursorDefault: 'სტანდარტული',
+    cursor3dArrow: '3D წითელი ისარი',
     // Routes
     routes: 'მარშრუტები',
     fastest: 'სწრაფი',
@@ -217,6 +225,10 @@ export const translations: Record<Language, Translations> = {
     traffic: 'Traffic',
     // Places (map POI visibility toggle)
     showPlaces: 'Show Places',
+    // Cursor (selectable vehicle marker)
+    cursorStyle: 'Cursor',
+    cursorDefault: 'Default',
+    cursor3dArrow: '3D Red Arrow',
     // Routes
     routes: 'Routes',
     fastest: 'Fastest',
@@ -259,6 +271,7 @@ export const LANGUAGE_KEY = 'geonav_language';
 export const MAP_STYLE_KEY = 'geonav_map_style';
 export const TRAFFIC_KEY = 'geonav_traffic';
 export const PLACES_KEY = 'geonav_places';
+export const CURSOR_KEY = 'geonav_cursor';
 
 export function getStoredLanguage(): Language {
   if (typeof window === 'undefined') return 'ka';

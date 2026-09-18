@@ -5,7 +5,8 @@ import dynamic from 'next/dynamic';
 
 import type { Language } from '@/lib/i18n';
 import type { MapStyle } from '@/types';
-import { getStoredLanguage, setStoredLanguage, getTranslations, TRAFFIC_KEY, PLACES_KEY } from '@/lib/i18n';
+import { getStoredLanguage, setStoredLanguage, getTranslations, TRAFFIC_KEY, PLACES_KEY, CURSOR_KEY } from '@/lib/i18n';
+import { DEFAULT_CURSOR_ID, isCursorId, type CursorId } from '@/lib/cursors';
 import { getCurrentPosition } from '@/lib/geolocation';
 import { getPerformanceMode, applyPerformanceModeToDocument } from '@/lib/performanceMode';
 import type {
@@ -182,6 +183,10 @@ export default function NavigationMapClient() {
   // recreates the underlying vector map with a different Map ID (see
   // MapCanvas), the same mechanism already used for the Dark/Light toggle.
   const [placesEnabled, setPlacesEnabled] = useState(false);
+  // Selectable vehicle cursor — default keeps the original arrow so existing
+  // users see zero visual change unless they pick the new option (see
+  // src/lib/cursors.ts).
+  const [cursorId, setCursorId] = useState<CursorId>(DEFAULT_CURSOR_ID);
   // Tap-to-navigate state
   const [pinDestination, setPinDestination] = useState<PinDestination | null>(null);
   const [isPinCalculating, setIsPinCalculating] = useState(false);
@@ -212,6 +217,9 @@ export default function NavigationMapClient() {
     // Restore places preference
     const storedPlaces = localStorage.getItem(PLACES_KEY);
     if (storedPlaces === 'true') setPlacesEnabled(true);
+    // Restore cursor preference (falls back to DEFAULT_CURSOR_ID if unset/invalid)
+    const storedCursor = localStorage.getItem(CURSOR_KEY);
+    if (isCursorId(storedCursor)) setCursorId(storedCursor);
 
     // Tesla / low-performance mode: sets data-perf-mode on <html> so CSS can
     // drop expensive backdrop-filter blur (see tailwind.css). Runs as early
@@ -577,6 +585,13 @@ export default function NavigationMapClient() {
     });
   }, []);
 
+  // Cursor selection — direct setter (not a boolean toggle), persisted
+  // immediately so the choice survives a reload.
+  const handleCursorChange = useCallback((id: CursorId) => {
+    setCursorId(id);
+    localStorage.setItem(CURSOR_KEY, id);
+  }, []);
+
   // Tap-to-navigate: handle map tap
   const handleMapTap = useCallback(
     (coords: [number, number]) => {
@@ -825,6 +840,7 @@ export default function NavigationMapClient() {
           mapStyle={mapStyle}
           trafficEnabled={trafficEnabled}
           placesEnabled={placesEnabled}
+          cursorId={cursorId}
           onMapReady={handleMapReady}
           onUserLocationUpdate={handleUserLocationUpdate}
           onLocationError={handleLocationError}
@@ -879,6 +895,8 @@ export default function NavigationMapClient() {
           onTrafficToggle={handleTrafficToggle}
           placesEnabled={placesEnabled}
           onPlacesToggle={handlePlacesToggle}
+          currentCursorId={cursorId}
+          onCursorChange={handleCursorChange}
           t={t}
         />
         <ZoomControls

@@ -18,6 +18,7 @@ import {
 } from '@/lib/mapbox';
 import { watchPosition, clearWatch } from '@/lib/geolocation';
 import { getPerformanceMode } from '@/lib/performanceMode';
+import { DEFAULT_CURSOR_ID, getCursorOption, type CursorId, type CursorOption } from '@/lib/cursors';
 
 /// <reference types="@types/google.maps" />
 declare const google: typeof globalThis.google;
@@ -244,11 +245,11 @@ function applyPoiVisibilityFallback(map: google.maps.Map, style: MapStyle, place
   map.setOptions({ styles });
 }
 
-// Vehicle/location marker asset (provided PNG, tip pointing up/north by
+// Vehicle/location marker asset (provided PNGs, tip pointing up/north by
 // design — a CSS rotate(heading deg) therefore maps directly to compass
-// bearing with no offset needed).
-const ARROW_ASSET_URL = '/markers/arrow.png';
-const ARROW_DISPLAY_SIZE = 40; // on-screen size in px
+// bearing with no offset needed). The actual asset/size list lives in
+// src/lib/cursors.ts (CURSOR_OPTIONS) so the Settings "Cursor" selector and
+// this renderer share one source of truth.
 
 // Destination pin asset (provided PNG). Anchor is the bottom tip of the
 // teardrop shape so it points exactly at the destination coordinate.
@@ -274,29 +275,26 @@ function createArrowOverlayClass() {
     private arrowEl: HTMLDivElement | null = null;
     private position: google.maps.LatLngLiteral;
     private heading: number;
+    private cursorOption: CursorOption;
 
-    constructor(position: google.maps.LatLngLiteral, heading: number) {
+    constructor(position: google.maps.LatLngLiteral, heading: number, cursorOption: CursorOption) {
       super();
       this.position = position;
       this.heading = heading;
+      this.cursorOption = cursorOption;
     }
 
     onAdd() {
       const container = document.createElement('div');
       container.style.position = 'absolute';
-      container.style.width = `${ARROW_DISPLAY_SIZE}px`;
-      container.style.height = `${ARROW_DISPLAY_SIZE}px`;
       container.style.pointerEvents = 'none';
       container.style.display = 'flex';
       container.style.alignItems = 'center';
       container.style.justifyContent = 'center';
 
       const arrowEl = document.createElement('div');
-      arrowEl.style.width = `${ARROW_DISPLAY_SIZE}px`;
-      arrowEl.style.height = `${ARROW_DISPLAY_SIZE}px`;
       arrowEl.style.willChange = 'transform';
       arrowEl.style.transformOrigin = '50% 50%';
-      arrowEl.style.backgroundImage = `url(${ARROW_ASSET_URL})`;
       arrowEl.style.backgroundSize = 'contain';
       arrowEl.style.backgroundRepeat = 'no-repeat';
       arrowEl.style.backgroundPosition = 'center';
@@ -304,6 +302,7 @@ function createArrowOverlayClass() {
       container.appendChild(arrowEl);
       this.container = container;
       this.arrowEl = arrowEl;
+      this.applyCursorOption();
       this.applyHeading();
 
       // IMPORTANT: markerLayer, not overlayLayer. Route polylines render in
@@ -323,8 +322,9 @@ function createArrowOverlayClass() {
       if (!projection) return;
       const point = projection.fromLatLngToDivPixel(new google.maps.LatLng(this.position));
       if (!point) return;
-      this.container.style.left = `${point.x - ARROW_DISPLAY_SIZE / 2}px`;
-      this.container.style.top = `${point.y - ARROW_DISPLAY_SIZE / 2}px`;
+      const size = this.cursorOption.displaySize;
+      this.container.style.left = `${point.x - size / 2}px`;
+      this.container.style.top = `${point.y - size / 2}px`;
     }
 
     onRemove() {
@@ -341,6 +341,26 @@ function createArrowOverlayClass() {
     setHeading(heading: number) {
       this.heading = heading;
       this.applyHeading();
+    }
+
+    // Swaps which cursor asset/size is displayed on the EXISTING marker —
+    // no recreation, so there's never a moment with two markers on screen
+    // and switching is a single, cheap DOM style update (image is already
+    // browser-cached from the Settings selector's own preview thumbnails).
+    setCursorOption(cursorOption: CursorOption) {
+      this.cursorOption = cursorOption;
+      this.applyCursorOption();
+      this.draw(); // display size may have changed — recompute the anchor offset
+    }
+
+    private applyCursorOption() {
+      if (!this.container || !this.arrowEl) return;
+      const { assetUrl, displaySize } = this.cursorOption;
+      this.container.style.width = `${displaySize}px`;
+      this.container.style.height = `${displaySize}px`;
+      this.arrowEl.style.width = `${displaySize}px`;
+      this.arrowEl.style.height = `${displaySize}px`;
+      this.arrowEl.style.backgroundImage = `url(${assetUrl})`;
     }
 
     private applyHeading() {
@@ -552,6 +572,10 @@ interface MapCanvasProps {
   /** Native map POI (places) visibility — see GOOGLE_MAPS_MAP_ID_POI /
    * resolveMapId. Defaults to false (POIs off, the normal nav experience). */
   placesEnabled?: boolean;
+  /** Which vehicle cursor asset to render — see src/lib/cursors.ts. Defaults
+   * to DEFAULT_CURSOR_ID (the original arrow), so omitting this prop keeps
+   * existing behavior identical. */
+  cursorId?: CursorId;
   onMapReady: () => void;
   onUserLocationUpdate: (location: UserLocation) => void;
   onLocationError: (type: 'denied' | 'unavailable') => void;
@@ -635,6 +659,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       mapStyle,
       trafficEnabled,
       placesEnabled = false,
+      cursorId = DEFAULT_CURSOR_ID,
       onMapReady,
       onUserLocationUpdate,
       onLocationError,
@@ -687,6 +712,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const onFollowDisabledRef = useRef(onFollowDisabled);
     const trafficEnabledRef = useRef(trafficEnabled);
     const placesEnabledRef = useRef(placesEnabled);
+    const cursorIdRef = useRef(cursorId);
     const onMapTapRef = useRef(onMapTap);
     const onOffRouteRef = useRef(onOffRoute);
     const onHeadingChangeRef = useRef(onHeadingChange);
@@ -708,6 +734,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     onFollowDisabledRef.current = onFollowDisabled;
     trafficEnabledRef.current = trafficEnabled;
     placesEnabledRef.current = placesEnabled;
+    cursorIdRef.current = cursorId;
     onMapTapRef.current = onMapTap;
     onOffRouteRef.current = onOffRoute;
     onHeadingChangeRef.current = onHeadingChange;
@@ -914,7 +941,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
       if (!userArrowMarkerRef.current) {
         if (!ArrowOverlayClassRef.current) return;
-        const overlay = new ArrowOverlayClassRef.current(position, heading);
+        const overlay = new ArrowOverlayClassRef.current(position, heading, getCursorOption(cursorIdRef.current));
         overlay.setMap(map);
         userArrowMarkerRef.current = overlay;
         return;
@@ -1117,6 +1144,13 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         applyTrafficVisibility(trafficEnabled);
       }
     }, [trafficEnabled, applyTrafficVisibility]);
+
+    // Cursor selection changed — update the existing marker's asset/size in
+    // place (see ArrowOverlay.setCursorOption). Never recreates the marker,
+    // so there's no window where two markers could exist at once.
+    useEffect(() => {
+      userArrowMarkerRef.current?.setCursorOption(getCursorOption(cursorId));
+    }, [cursorId]);
 
     useEffect(() => {
       const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
