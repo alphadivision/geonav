@@ -31,10 +31,10 @@ import { getStoredMapStyle, setStoredMapStyle } from './MapStyleSwitcher';
 
 import RouteAlternativesPanel from './RouteAlternativesPanel';
 import PinDestinationCard from './PinDestinationCard';
-import RecenterButton from './RecenterButton';
+import TeslaCompass, { type TeslaCompassHandle } from './TeslaCompass';
 import MapControlsPanel from './MapControlsPanel';
 import NavigationHUD from './NavigationHUD';
-import type { MapCanvasHandle, CompassLabel } from './MapCanvas';
+import type { MapCanvasHandle } from './MapCanvas';
 
 declare const google: typeof import('@types/google.maps') extends never
   ? any
@@ -175,9 +175,6 @@ export default function NavigationMapClient() {
   // match the vehicle's heading (only visually rotates on a vector map —
   // see USE_VECTOR_MAP in MapCanvas); 'northUp' keeps the camera fixed at 0.
   const [mapViewMode, setMapViewMode] = useState<'northUp' | 'headingUp'>('northUp');
-  // Live compass direction (8-point), only updates when the displayed
-  // letter actually changes — see MapCanvas's onHeadingChange contract.
-  const [compassLabel, setCompassLabel] = useState<CompassLabel>('N');
   const [trafficEnabled, setTrafficEnabled] = useState(false);
   // Native map POI (places) visibility — default OFF. Toggling this
   // recreates the underlying vector map with a different Map ID (see
@@ -193,6 +190,11 @@ export default function NavigationMapClient() {
   const [showReplacePrompt, setShowReplacePrompt] = useState<[number, number] | null>(null);
 
   const mapRef = useRef<MapCanvasHandle | null>(null);
+  // Imperative handle to the Tesla compass — MapCanvas writes the live
+  // vehicle heading into it directly every animation frame (see
+  // compassRef in MapCanvasProps), so the pointer/letters animate smoothly
+  // without a single extra React re-render.
+  const compassRef = useRef<TeslaCompassHandle | null>(null);
   // userLocation/mapZoom are updated on every GPS/zoom tick — kept as plain
   // refs (not React state) since nothing in this component's render output
   // depends on their live value, only callbacks that read the latest value
@@ -848,7 +850,7 @@ export default function NavigationMapClient() {
           followMode={followMode}
           navigationMode={navigationActive}
           mapViewMode={mapViewMode}
-          onHeadingChange={setCompassLabel}
+          compassRef={compassRef}
           onFollowDisabled={handleFollowDisabled}
           onMapTap={handleMapTap}
           onOffRoute={handleOffRoute}
@@ -868,12 +870,12 @@ export default function NavigationMapClient() {
             />
           </div>
           <div className="flex-shrink-0">
-            <RecenterButton
+            <TeslaCompass
+              ref={compassRef}
               onRecenter={handleRecenter}
               t={t}
               followMode={followMode}
               mapViewMode={mapViewMode}
-              compassLabel={compassLabel}
             />
           </div>
         </div>

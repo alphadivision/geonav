@@ -19,6 +19,7 @@ import {
 import { watchPosition, clearWatch } from '@/lib/geolocation';
 import { getPerformanceMode } from '@/lib/performanceMode';
 import { DEFAULT_CURSOR_ID, getCursorOption, type CursorId, type CursorOption } from '@/lib/cursors';
+import type { TeslaCompassHandle } from './TeslaCompass';
 
 /// <reference types="@types/google.maps" />
 declare const google: typeof globalThis.google;
@@ -595,22 +596,13 @@ interface MapCanvasProps {
    * screen-fixed arrow — only visually rotates on a vector map, see
    * USE_VECTOR_MAP). Defaults to 'northUp' — North-Up is the default mode. */
   mapViewMode?: 'northUp' | 'headingUp';
-  /** Fires only when the map's current camera-heading crosses into a new
-   * 45°-wide compass bucket (N/NE/E/SE/S/SW/W/NW) — not on every fractional
-   * degree of the per-frame easing — so the compass button can display the
-   * live geographic direction in Heading-Up mode without triggering a
-   * React re-render on every animation frame. */
-  onHeadingChange?: (cardinal: CompassLabel) => void;
-}
-
-export type CompassLabel = 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW';
-
-const COMPASS_LABELS: readonly CompassLabel[] = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-
-function headingToCardinal(heading: number): CompassLabel {
-  const normalized = ((heading % 360) + 360) % 360;
-  const index = Math.round(normalized / 45) % COMPASS_LABELS.length;
-  return COMPASS_LABELS[index];
+  /** Imperative handle to the Tesla-style compass (see TeslaCompass.tsx).
+   * Every animation frame, the per-frame loop below writes the current
+   * smoothed TRUE vehicle heading straight into this ref via
+   * `setHeading()` — a single DOM style write, bypassing React state so a
+   * continuously animating compass never triggers a re-render. Same heading
+   * source as the vehicle cursor; no separate/conflicting calculation. */
+  compassRef?: React.RefObject<TeslaCompassHandle | null>;
 }
 
 export interface MapCanvasHandle {
@@ -670,7 +662,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       onOffRoute,
       navigationMode = false,
       mapViewMode = 'northUp',
-      onHeadingChange,
+      compassRef,
     },
     ref
   ) => {
@@ -715,8 +707,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const cursorIdRef = useRef(cursorId);
     const onMapTapRef = useRef(onMapTap);
     const onOffRouteRef = useRef(onOffRoute);
-    const onHeadingChangeRef = useRef(onHeadingChange);
-    const lastReportedCardinalRef = useRef<CompassLabel | null>(null);
+    const compassRefPropRef = useRef(compassRef);
     const activeRouteGeometryRef = useRef<Array<[number, number]> | null>(null);
     const activeRouteSegmentsRef = useRef<TrafficSegment[] | null>(null);
     const lastOffRouteCheckRef = useRef<number>(0);
@@ -737,7 +728,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     cursorIdRef.current = cursorId;
     onMapTapRef.current = onMapTap;
     onOffRouteRef.current = onOffRoute;
-    onHeadingChangeRef.current = onHeadingChange;
+    compassRefPropRef.current = compassRef;
 
     const applyTrafficVisibility = useCallback((enabled: boolean) => {
       let map = mapRef.current;
@@ -1011,20 +1002,13 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         const cameraHeadingTarget = mapViewModeRef.current === 'northUp' ? 0 : targetHeadingRef.current;
         cameraHeadingRef.current = cameraHeadingRef.current + angleDiff(cameraHeadingRef.current, cameraHeadingTarget) * CAMERA_BEARING_ALPHA;
 
-        // Compass label: reflects whatever direction is currently at the top
-        // of the screen (the camera's actual heading), bucketed into 8
-        // compass points so it only fires — and only triggers a React
-        // re-render in the parent — when the DISPLAYED letter would actually
-        // change, not on every fractional degree of easing. In North-Up
-        // mode the button always shows a fixed "N" regardless of this value
-        // (see RecenterButton), so this only visibly matters in Heading-Up.
-        if (onHeadingChangeRef.current) {
-          const cardinal = headingToCardinal(cameraHeadingRef.current);
-          if (cardinal !== lastReportedCardinalRef.current) {
-            lastReportedCardinalRef.current = cardinal;
-            onHeadingChangeRef.current(cardinal);
-          }
-        }
+        // Tesla-style compass: same smoothed, shortest-path TRUE heading
+        // driving the vehicle cursor (currentHeadingRef), written straight
+        // into the compass's DOM ref every frame — a single style property
+        // write, no React state/re-render involved. Always the true
+        // heading, independent of North-Up/Heading-Up (see compassRef prop
+        // doc), so it stays a real directional indicator in both modes.
+        compassRefPropRef.current?.current?.setHeading(currentHeadingRef.current);
 
         // The arrow's ON-SCREEN rotation is relative to the camera's actual
         // rotation, not the raw compass heading — but ONLY on a vector map,
