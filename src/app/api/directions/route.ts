@@ -104,7 +104,11 @@ export async function GET(request: NextRequest) {
         },
       },
       travelMode: 'DRIVE',
-      routingPreference: 'TRAFFIC_AWARE',
+      // See matching comment in NavigationMapClient.tsx's fetchRoutes:
+      // TRAFFIC_AWARE_OPTIMAL requests Google's most accurate real-time
+      // traffic classification (higher latency, but avoids the latency
+      // shortcuts TRAFFIC_AWARE applies to the traffic model).
+      routingPreference: 'TRAFFIC_AWARE_OPTIMAL',
       computeAlternativeRoutes: true,
       // Required for the response to populate travelAdvisory.speedReadingIntervals
       // (per-segment traffic speed data) below — see src/lib/traffic.ts.

@@ -262,7 +262,15 @@ export default function NavigationMapClient() {
               },
             },
             travelMode: 'DRIVE',
-            routingPreference: 'TRAFFIC_AWARE',
+            // TRAFFIC_AWARE_OPTIMAL (not just TRAFFIC_AWARE) — per Google's
+            // own docs, this mode "prioritizes accuracy, calculating routes
+            // based on real-time traffic for the most precise ETAs" at the
+            // cost of somewhat higher latency, whereas TRAFFIC_AWARE applies
+            // latency-reducing shortcuts to the traffic model. That gap is
+            // exactly what could make our one-time route snapshot classify a
+            // stretch as NORMAL while the live, continuously-updating
+            // TrafficLayer shows real congestion there.
+            routingPreference: 'TRAFFIC_AWARE_OPTIMAL',
             computeAlternativeRoutes: true,
             // Required for the response to actually populate
             // travelAdvisory.speedReadingIntervals (per-segment traffic
@@ -332,6 +340,16 @@ export default function NavigationMapClient() {
                   intersections: step.intersections || [{ classes: [] }],
                 }));
                 const trafficSegments = buildTrafficSegments(route.travelAdvisory?.speedReadingIntervals, coords.length);
+                // One-time diagnostic (not per-frame — this runs once per
+                // route fetch) so a mismatch between the rendered route
+                // color and the live TrafficLayer can be confirmed from the
+                // browser console: whatever this prints is exactly what
+                // Google returned for THIS route's traffic snapshot, as
+                // opposed to the separately-refreshed TrafficLayer overlay.
+                console.log(
+                  `[fetchRoutes] route ${idx} traffic segments (of ${coords.length} points):`,
+                  trafficSegments ? trafficSegments.map((s) => `${s.category} [${s.startIdx}-${s.endIdx}]`).join(', ') : 'none (renders solid blue)'
+                );
                 return {
                   index: idx,
                   distance: route.distanceMeters,
