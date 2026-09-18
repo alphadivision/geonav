@@ -9,6 +9,7 @@ import { getStoredLanguage, setStoredLanguage, getTranslations, TRAFFIC_KEY, PLA
 import { DEFAULT_CURSOR_ID, isCursorId, type CursorId } from '@/lib/cursors';
 import { getCurrentPosition } from '@/lib/geolocation';
 import { getPerformanceMode, applyPerformanceModeToDocument } from '@/lib/performanceMode';
+import { buildTrafficSegments } from '@/lib/traffic';
 import type {
   SearchResult,
   RouteInfo,
@@ -18,8 +19,6 @@ import type {
   AppState,
   ErrorType,
   DirectionsResponse,
-  TrafficSegment,
-  TrafficSpeedCategory,
 } from '@/types';
 import SearchBar from './SearchBar';
 import ZoomControls from './ZoomControls';
@@ -91,6 +90,7 @@ function buildRouteAlternatives(data: DirectionsResponse): RouteAlternative[] {
     geometry: route.geometry,
     roadType: detectRoadType(route),
     isFastest: route.duration === fastestDuration,
+    trafficSegments: route.trafficSegments,
   }));
 }
 
@@ -131,31 +131,6 @@ function parseDurSec(durationStr: string): number {
   const match = durationStr.match(/^(\d+(?:\.\d+)?)s$/);
   if (match) return Math.round(parseFloat(match[1]));
   return 0;
-}
-
-// Converts the Routes API's real `travelAdvisory.speedReadingIntervals` into
-// our TrafficSegment[] shape. Per Google's docs the intervals are contiguous
-// and cover the whole polyline without overlap, but each interval's start
-// index is OPTIONAL and defaults to the previous interval's end (0 for the
-// first) — this reconstructs the implied start explicitly so downstream
-// rendering never has to guess. Returns undefined (not a fabricated single
-// segment) when the API didn't return this data at all.
-function buildTrafficSegments(
-  intervals: Array<{ startPolylinePointIndex?: number; endPolylinePointIndex: number; speed: TrafficSpeedCategory }> | undefined,
-  coordCount: number
-): TrafficSegment[] | undefined {
-  if (!intervals || intervals.length === 0) return undefined;
-  const segments: TrafficSegment[] = [];
-  let cursor = 0;
-  for (const interval of intervals) {
-    const start = interval.startPolylinePointIndex ?? cursor;
-    const end = Math.min(interval.endPolylinePointIndex, coordCount - 1);
-    if (end > start) {
-      segments.push({ startIdx: start, endIdx: end, category: interval.speed });
-    }
-    cursor = interval.endPolylinePointIndex;
-  }
-  return segments.length > 0 ? segments : undefined;
 }
 
 export default function NavigationMapClient() {
@@ -289,6 +264,12 @@ export default function NavigationMapClient() {
             travelMode: 'DRIVE',
             routingPreference: 'TRAFFIC_AWARE',
             computeAlternativeRoutes: true,
+            // Required for the response to actually populate
+            // travelAdvisory.speedReadingIntervals (per-segment traffic
+            // speed data) below — without this, Google silently omits it
+            // regardless of the field mask, and the route always renders as
+            // one solid color. See buildTrafficSegments in src/lib/traffic.ts.
+            extraComputations: ['TRAFFIC_ON_POLYLINE'],
             languageCode: 'ka',
             units: 'METRIC',
           };

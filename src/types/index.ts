@@ -113,6 +113,9 @@ export interface DirectionsResponse {
         }>;
       }>;
     }>;
+    // Only populated when the Routes API returned real segment-level traffic
+    // data for this route (see buildTrafficSegments in src/lib/traffic.ts).
+    trafficSegments?: TrafficSegment[];
   }>;
   waypoints: Array<{
     name: string;

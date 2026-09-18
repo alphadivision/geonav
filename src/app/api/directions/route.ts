@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { buildTrafficSegments } from '@/lib/traffic';
 
 // Server-side Google Routes API handler.
 // Requires an UNRESTRICTED server API key (no HTTP referrer restrictions).
@@ -105,6 +106,9 @@ export async function GET(request: NextRequest) {
       travelMode: 'DRIVE',
       routingPreference: 'TRAFFIC_AWARE',
       computeAlternativeRoutes: true,
+      // Required for the response to populate travelAdvisory.speedReadingIntervals
+      // (per-segment traffic speed data) below — see src/lib/traffic.ts.
+      extraComputations: ['TRAFFIC_ON_POLYLINE'],
       languageCode: 'ka',
       units: 'METRIC',
     };
@@ -116,7 +120,7 @@ export async function GET(request: NextRequest) {
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': GOOGLE_API_KEY,
-        'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.staticDuration,routes.polyline.encodedPolyline,routes.legs.distanceMeters,routes.legs.duration,routes.legs.steps.distanceMeters,routes.legs.steps.staticDuration,routes.legs.steps.navigationInstruction',
+        'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.staticDuration,routes.polyline.encodedPolyline,routes.legs.distanceMeters,routes.legs.duration,routes.legs.steps.distanceMeters,routes.legs.steps.staticDuration,routes.legs.steps.navigationInstruction,routes.travelAdvisory.speedReadingIntervals',
       },
       body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(12000),
@@ -156,6 +160,13 @@ export async function GET(request: NextRequest) {
             };
           }>;
         }>;
+        travelAdvisory?: {
+          speedReadingIntervals?: Array<{
+            startPolylinePointIndex?: number;
+            endPolylinePointIndex: number;
+            speed: 'NORMAL' | 'SLOW' | 'TRAFFIC_JAM';
+          }>;
+        };
       }>;
     };
 
@@ -195,6 +206,8 @@ export async function GET(request: NextRequest) {
         intersections: [{ classes: [] }],
       }));
 
+      const trafficSegments = buildTrafficSegments(route.travelAdvisory?.speedReadingIntervals, overviewCoords.length);
+
       return {
         distance: totalDistance,
         duration: totalDuration,
@@ -209,6 +222,7 @@ export async function GET(request: NextRequest) {
             steps,
           },
         ],
+        trafficSegments,
       };
     });
 
