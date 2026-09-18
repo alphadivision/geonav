@@ -521,48 +521,57 @@ function shiftTrafficSegments(
   return shifted;
 }
 
-// Renders the active A→B route as one or more colored polylines drawn from
-// a fixed, bounded pool — never creates/destroys map objects per update.
-// Each segment's coordinate range is disjoint from its neighbors (only the
-// shared boundary point overlaps), so a yellow/red segment always fully
-// REPLACES the blue route for that stretch — there is no separate "blue
-// underneath" layer for it to hide behind. Real per-segment traffic data
-// (from the Routes API) renders as BLUE (normal), YELLOW (slow), or RED
-// (heavy/congested) — never green. When no traffic data is available at
-// all for this route, the whole thing renders as a single plain BLUE
-// segment (the route's default color).
+// Renders the active A→B route as one or more colored casing+fill polyline
+// PAIRS drawn from two fixed, bounded pools (same index = same segment) —
+// never creates/destroys map objects per update, and never draws a single
+// full-route polyline anywhere. Each segment's coordinate range is disjoint
+// from its neighbors (only the shared boundary point overlaps), and BOTH
+// the casing (outline) and fill (inner stroke) are colored per that
+// segment's own category — so there is no permanently-blue layer of any
+// kind left behind a yellow/red stretch to make it read as "still blue".
+// Real per-segment traffic data (from the Routes API) renders as BLUE
+// (normal), YELLOW (slow), or RED (heavy/congested) — never green. When no
+// traffic data is available at all for this route, the whole thing renders
+// as a single plain BLUE segment (the route's default color).
 function renderRouteWithTraffic(
-  pool: google.maps.Polyline[],
+  casingPool: google.maps.Polyline[],
+  fillPool: google.maps.Polyline[],
   coordinates: Array<[number, number]>,
   segments: TrafficSegment[] | null | undefined
 ) {
   const path = coordinates.map(([lng, lat]) => ({ lat, lng }));
+  const poolSize = Math.min(casingPool.length, fillPool.length);
 
   if (!segments || segments.length === 0) {
-    if (path.length >= 2 && pool.length > 0) {
-      pool[0].setPath(path);
-      pool[0].setOptions({ strokeColor: ROUTE_DEFAULT_COLOR });
+    if (path.length >= 2 && poolSize > 0) {
+      casingPool[0].setPath(path);
+      casingPool[0].setOptions({ strokeColor: TRAFFIC_SEGMENT_CASING_COLOR.NORMAL });
+      fillPool[0].setPath(path);
+      fillPool[0].setOptions({ strokeColor: ROUTE_DEFAULT_COLOR });
     }
-    for (let i = path.length >= 2 ? 1 : 0; i < pool.length; i++) {
-      pool[i].setPath([]);
+    for (let i = path.length >= 2 ? 1 : 0; i < poolSize; i++) {
+      casingPool[i].setPath([]);
+      fillPool[i].setPath([]);
     }
     return;
   }
 
   let used = 0;
   for (const seg of segments) {
-    if (used >= pool.length) break;
+    if (used >= poolSize) break;
     const start = Math.max(0, seg.startIdx);
     const end = Math.min(coordinates.length - 1, seg.endIdx);
     const segPath = path.slice(start, end + 1);
     if (segPath.length < 2) continue;
-    const poly = pool[used];
-    poly.setPath(segPath);
-    poly.setOptions({ strokeColor: TRAFFIC_SEGMENT_COLOR[seg.category] });
+    casingPool[used].setPath(segPath);
+    casingPool[used].setOptions({ strokeColor: TRAFFIC_SEGMENT_CASING_COLOR[seg.category] });
+    fillPool[used].setPath(segPath);
+    fillPool[used].setOptions({ strokeColor: TRAFFIC_SEGMENT_COLOR[seg.category] });
     used++;
   }
-  for (let i = used; i < pool.length; i++) {
-    pool[i].setPath([]);
+  for (let i = used; i < poolSize; i++) {
+    casingPool[i].setPath([]);
+    fillPool[i].setPath([]);
   }
 }
 
@@ -644,6 +653,22 @@ const TRAFFIC_SEGMENT_COLOR: Record<TrafficSegment['category'], string> = {
   TRAFFIC_JAM: '#ea4335',
 };
 
+// Casing (the thicker outline drawn behind each segment, giving the route
+// its bordered "nav app" look) is now colored PER SEGMENT too, matching
+// each segment's own category as a darker shade of the same hue. This is
+// the fix for the route visually staying blue everywhere: a single
+// permanently-blue full-route casing used to sit behind the colored
+// segments, and its dark-blue border (roughly half the total stroke width,
+// since the casing is much wider than the fill) dominated the eye even
+// though the yellow/red fill was technically rendered on top of it. There
+// is now no full-route polyline anywhere — only per-segment casing+fill
+// pairs, so a red/yellow segment is red/yellow all the way through.
+const TRAFFIC_SEGMENT_CASING_COLOR: Record<TrafficSegment['category'], string> = {
+  NORMAL: '#0d47a1',
+  SLOW: '#7a5200',
+  TRAFFIC_JAM: '#7a1a1a',
+};
+
 const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
   (
     {
@@ -679,8 +704,12 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const trafficLayerRef = useRef<google.maps.TrafficLayer | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
 
     // Route polylines
+    // mainRouteCasingPoolRef/mainRouteSegmentPolylinesRef are parallel pools
+    // (same index = same traffic segment) — see renderRouteWithTraffic. No
+    // single full-route polyline exists for the main route anymore, so a
+    // yellow/red stretch can never have a permanently-blue layer behind it.
     const mainRouteSegmentPolylinesRef = useRef<google.maps.Polyline[]>([]); // eslint-disable-line @typescript-eslint/no-explicit-any
-    const mainRouteCasingRef = useRef<google.maps.Polyline | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const mainRouteCasingPoolRef = useRef<google.maps.Polyline[]>([]); // eslint-disable-line @typescript-eslint/no-explicit-any
     const altRoutePolylinesRef = useRef<Array<{ casing: google.maps.Polyline; line: google.maps.Polyline }>>([]); // eslint-disable-line @typescript-eslint/no-explicit-any
 
     // State refs
@@ -884,7 +913,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
       // Re-attach every existing overlay to the new map instance — nothing
       // here is recreated, just repointed.
-      mainRouteCasingRef.current?.setMap(newMap);
+      mainRouteCasingPoolRef.current.forEach((poly) => poly.setMap(newMap));
       mainRouteSegmentPolylinesRef.current.forEach((poly) => poly.setMap(newMap));
       altRoutePolylinesRef.current.forEach(({ casing, line }) => {
         casing.setMap(newMap);
@@ -1068,9 +1097,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           const trimmed = [point, ...activeRouteGeometryRef.current!.slice(segIdx + 1)];
           activeRouteGeometryRef.current = trimmed;
           activeRouteSegmentsRef.current = shiftTrafficSegments(activeRouteSegmentsRef.current, segIdx);
-          const path = trimmed.map(([lng, lat]) => ({ lat, lng }));
-          mainRouteCasingRef.current?.setPath(path);
-          renderRouteWithTraffic(mainRouteSegmentPolylinesRef.current, trimmed, activeRouteSegmentsRef.current);
+          renderRouteWithTraffic(mainRouteCasingPoolRef.current, mainRouteSegmentPolylinesRef.current, trimmed, activeRouteSegmentsRef.current);
         }
 
         const posGap = haversineDistance(nextPosition, target);
@@ -1209,19 +1236,22 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         // google.maps.OverlayView only exists now that 'maps' has loaded.
         ArrowOverlayClassRef.current = createArrowOverlayClass();
 
-        // Initialize route polylines
-        mainRouteCasingRef.current = new google.maps.Polyline({
-          map,
-          path: [],
-          strokeColor: '#0d47a1',
-          strokeWeight: 12,
-          strokeOpacity: 0.9,
-          zIndex: 1,
-        });
-        // Fixed pool of segment polylines for the active A→B route — real
-        // per-segment traffic coloring (see renderRouteWithTraffic), never
-        // created/destroyed at runtime.
+        // Initialize route polylines — two parallel bounded pools (casing +
+        // fill, same index = same traffic segment), never a single
+        // full-route polyline. Real per-segment traffic coloring happens
+        // entirely in renderRouteWithTraffic; neither pool is ever
+        // created/destroyed again after this.
         for (let i = 0; i < MAX_ROUTE_SEGMENTS; i++) {
+          mainRouteCasingPoolRef.current.push(
+            new google.maps.Polyline({
+              map,
+              path: [],
+              strokeColor: TRAFFIC_SEGMENT_CASING_COLOR.NORMAL,
+              strokeWeight: 12,
+              strokeOpacity: 0.9,
+              zIndex: 1,
+            })
+          );
           mainRouteSegmentPolylinesRef.current.push(
             new google.maps.Polyline({
               map,
@@ -1369,7 +1399,8 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         trafficLayerRef.current?.setMap(null);
         mainRouteSegmentPolylinesRef.current.forEach((poly) => poly.setMap(null));
         mainRouteSegmentPolylinesRef.current = [];
-        mainRouteCasingRef.current?.setMap(null);
+        mainRouteCasingPoolRef.current.forEach((poly) => poly.setMap(null));
+        mainRouteCasingPoolRef.current = [];
         altRoutePolylinesRef.current.forEach(({ casing, line }) => {
           casing.setMap(null);
           line.setMap(null);
@@ -1439,13 +1470,11 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         setRoute(geometry: { type: string; coordinates: Array<[number, number]> } | null) {
           if (!mapRef.current || !isMapReadyRef.current) return;
           if (geometry) {
-            const path = geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
-            mainRouteCasingRef.current?.setPath(path);
             activeRouteGeometryRef.current = geometry.coordinates as [number, number][];
             activeRouteSegmentsRef.current = null;
-            renderRouteWithTraffic(mainRouteSegmentPolylinesRef.current, activeRouteGeometryRef.current, null);
+            renderRouteWithTraffic(mainRouteCasingPoolRef.current, mainRouteSegmentPolylinesRef.current, activeRouteGeometryRef.current, null);
           } else {
-            mainRouteCasingRef.current?.setPath([]);
+            mainRouteCasingPoolRef.current.forEach((poly) => poly.setPath([]));
             mainRouteSegmentPolylinesRef.current.forEach((poly) => poly.setPath([]));
             activeRouteGeometryRef.current = null;
             activeRouteSegmentsRef.current = null;
@@ -1473,11 +1502,9 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
           const selected = routes.find((r) => r.index === selectedIndex);
           if (selected) {
-            const path = selected.geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
-            mainRouteCasingRef.current?.setPath(path);
             activeRouteGeometryRef.current = selected.geometry.coordinates as [number, number][];
             activeRouteSegmentsRef.current = selected.trafficSegments ?? null;
-            renderRouteWithTraffic(mainRouteSegmentPolylinesRef.current, activeRouteGeometryRef.current, activeRouteSegmentsRef.current);
+            renderRouteWithTraffic(mainRouteCasingPoolRef.current, mainRouteSegmentPolylinesRef.current, activeRouteGeometryRef.current, activeRouteSegmentsRef.current);
           }
         },
 
@@ -1501,11 +1528,9 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
           const selected = routes.find((r) => r.index === index);
           if (selected) {
-            const path = selected.geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
-            mainRouteCasingRef.current?.setPath(path);
             activeRouteGeometryRef.current = selected.geometry.coordinates as [number, number][];
             activeRouteSegmentsRef.current = selected.trafficSegments ?? null;
-            renderRouteWithTraffic(mainRouteSegmentPolylinesRef.current, activeRouteGeometryRef.current, activeRouteSegmentsRef.current);
+            renderRouteWithTraffic(mainRouteCasingPoolRef.current, mainRouteSegmentPolylinesRef.current, activeRouteGeometryRef.current, activeRouteSegmentsRef.current);
           }
         },
 
