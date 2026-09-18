@@ -79,6 +79,13 @@ export interface Translations {
   // Navigation mode
   startRoute: string;
   exitNavigation: string;
+  // Account / Google sign-in
+  account: string;
+  signInWithGoogle: string;
+  signOut: string;
+  authLoading: string;
+  authError: string;
+  authNotConfigured: string;
 }
 
 export const translations: Record<Language, Translations> = {
@@ -155,6 +162,12 @@ export const translations: Record<Language, Translations> = {
     language: 'ენა',
     startRoute: 'მარშრუტის დაწყება',
     exitNavigation: 'ნავიგაციის დასრულება',
+    account: 'ანგარიში',
+    signInWithGoogle: 'Google-ით შესვლა',
+    signOut: 'გასვლა',
+    authLoading: 'შესვლა მიმდინარეობს...',
+    authError: 'ავტორიზაცია ვერ მოხერხდა',
+    authNotConfigured: 'სერვისი ჯერ არ არის მზად',
   },
   en: {
     appName: 'TSL MAP',
@@ -229,6 +242,12 @@ export const translations: Record<Language, Translations> = {
     language: 'Language',
     startRoute: 'Start Route',
     exitNavigation: 'Exit Navigation',
+    account: 'Account',
+    signInWithGoogle: 'Sign in with Google',
+    signOut: 'Sign out',
+    authLoading: 'Signing in...',
+    authError: 'Sign-in failed',
+    authNotConfigured: 'Sign-in isn\'t set up yet',
   },
 };
 

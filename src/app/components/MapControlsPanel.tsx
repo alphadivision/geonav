@@ -4,6 +4,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { SlidersHorizontal, AlertTriangle, MapPin } from 'lucide-react';
 import type { MapStyle } from '@/types';
 import type { Language, Translations } from '@/lib/i18n';
+import AccountSection from './AccountSection';
 
 interface MapControlsPanelProps {
   language: Language;
@@ -103,6 +104,9 @@ export default function MapControlsPanel({
               {t.mapControls}
             </span>
           </div>
+
+          {/* Account (Google sign-in) */}
+          <AccountSection t={t} />
 
           {/* Language */}
           <div className="px-4 py-3 border-b border-white/10">
