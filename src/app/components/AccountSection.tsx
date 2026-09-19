@@ -64,14 +64,6 @@ export default function AccountSection({ t, user, authStatus, onSignIn, onSignOu
               <p className="text-xs font-semibold text-foreground truncate">{displayName}</p>
               <p className="text-[10px] text-muted-foreground truncate">{user.email}</p>
             </div>
-            <button
-              onClick={onSignOut}
-              className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-white/10 transition-colors active:scale-95"
-              aria-label={t.signOut}
-              title={t.signOut}
-            >
-              <LogOut size={14} />
-            </button>
           </div>
 
           {/* Plan / Premium placeholder — no Stripe wiring yet, just the
@@ -88,6 +80,16 @@ export default function AccountSection({ t, user, authStatus, onSignIn, onSignOu
               {t.buyPremium}
             </button>
           </div>
+
+          <button
+            onClick={onSignOut}
+            className="w-full mt-2 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold text-muted-foreground hover:text-foreground hover:bg-white/10 transition-colors active:scale-95"
+            aria-label={t.signOut}
+            title={t.signOut}
+          >
+            <LogOut size={14} />
+            {t.signOut}
+          </button>
         </div>
       ) : (
         <div>

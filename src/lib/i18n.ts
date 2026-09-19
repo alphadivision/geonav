@@ -180,13 +180,13 @@ export const translations: Record<Language, Translations> = {
     exitNavigation: 'ნავიგაციის დასრულება',
     account: 'ანგარიში',
     signInWithGoogle: 'Google-ით შესვლა',
-    signOut: 'გასვლა',
+    signOut: 'გამოსვლა',
     authLoading: 'შესვლა მიმდინარეობს...',
     authError: 'ავტორიზაცია ვერ მოხერხდა',
     authNotConfigured: 'სერვისი ჯერ არ არის მზად',
     accountPlan: 'გეგმა',
     accountPlanFree: 'უფასო',
-    buyPremium: 'Premium-ის შეძენა',
+    buyPremium: 'გამოწერა',
   },
   en: {
     appName: 'TSL MAP',
@@ -275,7 +275,7 @@ export const translations: Record<Language, Translations> = {
     authNotConfigured: 'Sign-in isn\'t set up yet',
     accountPlan: 'Plan',
     accountPlanFree: 'Free',
-    buyPremium: 'Buy Premium',
+    buyPremium: 'Subscribe',
   },
 };
 

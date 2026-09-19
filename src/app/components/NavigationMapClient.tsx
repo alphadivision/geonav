@@ -12,7 +12,6 @@ import { getPerformanceMode, applyPerformanceModeToDocument } from '@/lib/perfor
 import { buildTrafficSegments } from '@/lib/traffic';
 import {
   subscribeToAuthState,
-  completeRedirectSignIn,
   signInWithGoogle,
   signOutUser,
   type User as FirebaseUser,
@@ -207,13 +206,11 @@ export default function NavigationMapClient() {
 
   // Single Firebase auth subscription for the whole app: drives the Account
   // section's UI (firebaseUser/authStatus) AND feeds the recent-route save
-  // effect below (firebaseUidRef) from the exact same source. Runs
-  // completeRedirectSignIn() first — this is the earliest point after a
-  // Google redirect sign-in lands back on the app that any Firebase call
-  // happens, maximizing the chance it's actually mounted in time to see it
-  // (Firebase itself is a no-op when not configured, see isFirebaseConfigured).
+  // effect below (firebaseUidRef) from the exact same source. Mounted here
+  // (an always-mounted component) rather than inside AccountSection, which
+  // only mounts when Settings is opened. Firebase itself is a no-op when
+  // not configured (see isFirebaseConfigured).
   useEffect(() => {
-    completeRedirectSignIn().catch(() => setAuthStatus('error'));
     const unsubscribe = subscribeToAuthState((user) => {
       firebaseUidRef.current = user?.uid ?? null;
       setFirebaseUser(user);
@@ -225,13 +222,21 @@ export default function NavigationMapClient() {
   const handleFirebaseSignIn = useCallback(async () => {
     setAuthStatus('loading');
     try {
-      // Navigates the browser away to Google immediately on success — this
-      // only ever resolves/rejects here if that redirect itself failed to
-      // start. The actual signed-in state arrives later via
-      // subscribeToAuthState above, after the redirect completes.
+      // Resolves once the popup completes — the signed-in user itself
+      // arrives via the subscribeToAuthState subscription above, which
+      // fires essentially immediately after this resolves.
       await signInWithGoogle();
-    } catch {
-      setAuthStatus('error');
+      setAuthStatus('idle');
+    } catch (err) {
+      const code = (err as { code?: string } | undefined)?.code;
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        // The user dismissed the popup themselves — not a real error, just
+        // go back to the plain sign-in button with no error message.
+        setAuthStatus('idle');
+      } else {
+        console.error('[firebase-auth] Google sign-in failed:', err);
+        setAuthStatus('error');
+      }
     }
   }, []);
 

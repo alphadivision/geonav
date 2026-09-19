@@ -1,5 +1,5 @@
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
-import { getAuth, type Auth } from 'firebase/auth';
+import { getAuth, setPersistence, browserLocalPersistence, type Auth } from 'firebase/auth';
 import { getFirestore, type Firestore } from 'firebase/firestore';
 
 // Single source of truth for Firebase setup — every other file under
@@ -39,6 +39,14 @@ let dbInstance: Firestore | null = null;
 if (isFirebaseConfigured) {
   app = getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
   authInstance = getAuth(app);
+  // browserLocalPersistence is already getAuth()'s default, but set it
+  // explicitly so the signed-in session survives page refreshes/reopening
+  // the app (required — see authService.ts for the popup-based Google
+  // sign-in flow). Fired and forgotten at module init, well before any
+  // user-triggered sign-in call has a chance to race it.
+  setPersistence(authInstance, browserLocalPersistence).catch((err) => {
+    console.error('[firebase-auth] setPersistence failed:', err);
+  });
   dbInstance = getFirestore(app);
 }
 
