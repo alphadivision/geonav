@@ -1305,6 +1305,24 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         attachMapListeners(map);
         applyPoiVisibilityFallback(map, mapStyle, placesEnabledRef.current);
 
+        // One-time diagnostic (not per-frame) for the "Places OFF but POIs
+        // still visible" class of bug: on a vector map (Map ID present),
+        // POI visibility is controlled ENTIRELY by that Map ID's Cloud
+        // Console style — our own `styles` JS array has zero effect there
+        // (Google ignores it whenever `mapId` is set), and
+        // applyPoiVisibilityFallback only ever does anything if the map
+        // silently degraded to raster. So if POIs are visible while this
+        // log shows placesEnabled=false and renderingType=VECTOR, the fix
+        // is in Google Cloud Console (Map Management > this Map ID > Style
+        // > POI density = None), not in this codebase.
+        if (USE_VECTOR_MAP) {
+          google.maps.event.addListenerOnce(map, 'tilesloaded', () => {
+            console.log(
+              `[TSLMAP] map diagnostic — placesEnabled=${placesEnabledRef.current}, activeMapId=${resolveMapId(placesEnabledRef.current)}, renderingType=${map.getRenderingType?.()}`
+            );
+          });
+        }
+
         isMapReadyRef.current = true;
         onMapReady();
 
