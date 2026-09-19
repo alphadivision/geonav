@@ -2,8 +2,9 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { LogOut, Loader2 } from 'lucide-react';
-import type { User } from '@supabase/supabase-js';
-import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
+import type { User } from 'firebase/auth';
+import { isFirebaseConfigured } from '@/lib/firebase/config';
+import { subscribeToAuthState, completeRedirectSignIn, signInWithGoogle, signOutUser } from '@/lib/firebase/authService';
 import type { Translations } from '@/lib/i18n';
 
 interface AccountSectionProps {
@@ -32,59 +33,45 @@ export default function AccountSection({ t }: AccountSectionProps) {
   const [status, setStatus] = useState<AuthUiState>('idle');
 
   useEffect(() => {
-    if (!isSupabaseConfigured) return;
+    if (!isFirebaseConfigured) return;
 
-    // Supabase returns OAuth errors (e.g. the user cancelled the Google
-    // consent screen) as query params on the redirect back to the app,
-    // rather than throwing in JS. Surface that once, then clean the URL so
-    // it doesn't reappear on a later reload.
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('error')) {
-      setStatus('error');
-      const url = new URL(window.location.href);
-      url.searchParams.delete('error');
-      url.searchParams.delete('error_code');
-      url.searchParams.delete('error_description');
-      window.history.replaceState({}, '', url.toString());
-    }
+    // Picks up the result of a signInWithGoogle() redirect that just
+    // returned, if any — a no-op otherwise. Runs before subscribing so a
+    // failed redirect can flip the UI to the error state immediately.
+    completeRedirectSignIn().catch(() => setStatus('error'));
 
-    supabase.auth.getSession().then(({ data }) => {
-      setUser(data.session?.user ?? null);
-    });
-
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+    const unsubscribe = subscribeToAuthState((firebaseUser) => {
+      setUser(firebaseUser);
       setStatus('idle');
     });
 
-    return () => subscription.subscription.unsubscribe();
+    return unsubscribe;
   }, []);
 
   const handleSignIn = useCallback(async () => {
-    if (!isSupabaseConfigured) {
+    if (!isFirebaseConfigured) {
       setStatus('error');
       return;
     }
     setStatus('loading');
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: window.location.origin },
-    });
-    // On success the browser navigates away to Google immediately — this
-    // only runs if the request itself failed before that redirect happened.
-    if (error) {
+    try {
+      // Navigates the browser away to Google immediately on success — this
+      // only ever resolves/rejects here if that redirect itself failed to
+      // start.
+      await signInWithGoogle();
+    } catch {
       setStatus('error');
     }
   }, []);
 
   const handleSignOut = useCallback(async () => {
-    await supabase.auth.signOut();
+    await signOutUser();
     setUser(null);
     setStatus('idle');
   }, []);
 
-  const avatarUrl = (user?.user_metadata?.avatar_url || user?.user_metadata?.picture) as string | undefined;
-  const displayName = (user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email) as string | undefined;
+  const avatarUrl = user?.photoURL ?? undefined;
+  const displayName = user?.displayName ?? user?.email ?? undefined;
 
   return (
     <div className="px-4 py-3 border-b border-white/10">
@@ -129,7 +116,7 @@ export default function AccountSection({ t }: AccountSectionProps) {
           </button>
           {status === 'error' && (
             <p className="text-[10px] text-danger mt-1.5 text-center">
-              {isSupabaseConfigured ? t.authError : t.authNotConfigured}
+              {isFirebaseConfigured ? t.authError : t.authNotConfigured}
             </p>
           )}
         </div>

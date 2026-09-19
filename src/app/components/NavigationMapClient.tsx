@@ -10,6 +10,8 @@ import { DEFAULT_CURSOR_ID, isCursorId, type CursorId } from '@/lib/cursors';
 import { getCurrentPosition } from '@/lib/geolocation';
 import { getPerformanceMode, applyPerformanceModeToDocument } from '@/lib/performanceMode';
 import { buildTrafficSegments } from '@/lib/traffic';
+import { subscribeToAuthState } from '@/lib/firebase/authService';
+import { saveRecentRoute } from '@/lib/firebase/routesService';
 import type {
   SearchResult,
   RouteInfo,
@@ -181,9 +183,46 @@ export default function NavigationMapClient() {
   const userLocationRef = useRef<UserLocation | null>(null);
   const mapZoomRef = useRef(12);
   const routeAlternativesRef = useRef<RouteAlternative[]>([]);
+  // Current Firebase uid (or null if signed out/not configured) — a ref
+  // rather than state since it's only ever read by the recent-route save
+  // effect below, not rendered.
+  const firebaseUidRef = useRef<string | null>(null);
 
   // Keep refs in sync
   routeAlternativesRef.current = routeAlternatives;
+
+  // Track sign-in state for recent-route saving (see the effect below).
+  // Firebase itself is a no-op when not configured (see isFirebaseConfigured).
+  useEffect(() => {
+    const unsubscribe = subscribeToAuthState((user) => {
+      firebaseUidRef.current = user?.uid ?? null;
+    });
+    return unsubscribe;
+  }, []);
+
+  // Save the just-calculated route to the signed-in user's recent routes
+  // (latest 5, see saveRecentRoute) — fires whenever a route actually
+  // becomes active, regardless of which flow produced it (search, quick
+  // search, or tap-to-navigate all funnel through these two state updates).
+  // A no-op if signed out or Firebase isn't configured. Fire-and-forget:
+  // never blocks or affects the route that's already being shown.
+  useEffect(() => {
+    if (!routeInfo || !selectedDestination) return;
+    const uid = firebaseUidRef.current;
+    if (!uid) return;
+    const origin = userLocationRef.current;
+    if (!origin) return;
+    saveRecentRoute(uid, {
+      destinationName: selectedDestination.name,
+      destinationAddress: selectedDestination.address,
+      originCoordinates: [origin.lng, origin.lat],
+      destinationCoordinates: selectedDestination.coordinates,
+      distance: routeInfo.distance,
+      duration: routeInfo.duration,
+    }).catch((err) => {
+      console.error('[firebase] Failed to save recent route:', err);
+    });
+  }, [routeInfo, selectedDestination]);
 
   // Initialize language, map style, and traffic from localStorage
   useEffect(() => {

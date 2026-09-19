@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint"
@@ -12,11 +12,11 @@
     "@googlemaps/js-api-loader": "^2.1.1",
     "@heroicons/react": "^2.2.0",
     "@radix-ui/react-slot": "^1.2.4",
-    "@supabase/supabase-js": "^2.116.0",
     "@upstash/redis": "^1.35.7",
     "@vercel/blob": "^2.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "firebase": "^12.19.0",
     "lucide-react": "^0.555.0",
     "mapbox-gl": "^3.16.0",
     "next": "16.0.7",

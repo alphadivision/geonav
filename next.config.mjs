@@ -1,4 +1,7 @@
+import { createRequire } from 'module';
 import { imageHosts } from './image-hosts.config.mjs';
+
+const require = createRequire(import.meta.url);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -32,13 +35,26 @@ const nextConfig = {
     }
   ) {
     if (dev) {
-      config.module.rules.push({
-        test: /\.(jsx|tsx)$/,
-        exclude: [/node_modules/],
-        use: [{
-          loader: '@dhiwise/component-tagger/nextLoader',
-        }],
-      });
+      // Optional: only wired up if this package is actually installed (a
+      // leftover dev-tooling hook from the original scaffold, unrelated to
+      // the app itself). Without this guard, `next dev` 500s on every
+      // request whenever the package isn't present in node_modules.
+      let componentTaggerAvailable = false;
+      try {
+        require.resolve('@dhiwise/component-tagger/nextLoader');
+        componentTaggerAvailable = true;
+      } catch {
+        // Not installed — skip the loader entirely.
+      }
+      if (componentTaggerAvailable) {
+        config.module.rules.push({
+          test: /\.(jsx|tsx)$/,
+          exclude: [/node_modules/],
+          use: [{
+            loader: '@dhiwise/component-tagger/nextLoader',
+          }],
+        });
+      }
       const ignoredPaths = (process.env.WATCH_IGNORED_PATHS || '')
         .split(',')
         .map((p) => p.trim())
