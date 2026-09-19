@@ -795,8 +795,14 @@ export default function NavigationMapClient() {
     }
   }, []);
 
-  // Off-route: recalculate
+  // Off-route: recalculate. Guarded against overlap — MapCanvas's off-route
+  // detector could in principle call this again (e.g. another confirm
+  // window firing) before a previous recalculation has finished; without
+  // this guard that would mean two concurrent /directions requests instead
+  // of one, and is exactly the "API request loop" this must not create.
+  const isReroutingRef = useRef(false);
   const handleOffRoute = useCallback(async () => {
+    if (isReroutingRef.current) return;
     const loc = userLocationRef.current;
     const alts = routeAlternativesRef.current;
     if (!loc || alts.length === 0) return;
@@ -806,7 +812,11 @@ export default function NavigationMapClient() {
       currentRoute.geometry.coordinates.length - 1
     ] as [number, number];
 
+    isReroutingRef.current = true;
     try {
+      // Always recalculated FROM the vehicle's current actual position
+      // (loc), never from the old route — satisfies "new route must start
+      // from where the vehicle actually is now."
       const newAlts = await fetchRoutes(loc, destCoords);
       if (!newAlts || newAlts.length === 0) return;
 
@@ -824,6 +834,8 @@ export default function NavigationMapClient() {
       }
     } catch (err) {
       console.error('[off-route] Recalculation failed:', err);
+    } finally {
+      isReroutingRef.current = false;
     }
   }, [fetchRoutes]);
 

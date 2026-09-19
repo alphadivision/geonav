@@ -40,6 +40,21 @@ const CAMERA_BEARING_ALPHA = 0.12; // camera rotation easing (slightly slower, l
 const CAMERA_MOVE_THRESHOLD_M = 0.1; // skip redundant moveCamera calls once converged
 const CAMERA_HEADING_THRESHOLD_DEG = 0.1;
 
+// Dead-reckoning: between real GPS fixes, the interpolation TARGET itself
+// keeps advancing along the last confirmed heading at the last reported GPS
+// speed (see getExtrapolatedTarget), instead of sitting still at a stale
+// fix while the lerp above catches up to it. That's what turns "glide then
+// stop then glide" (one lerp per GPS tick) into continuous motion — the
+// lerp is still what actually smooths/corrects toward reality, this just
+// keeps giving it a moving target to chase. Capped so a long GPS gap can't
+// let the prediction run away from where the vehicle actually is; ignored
+// below walking-speed noise so a parked car doesn't creep from GPS jitter;
+// and ignored entirely for a fix whose own accuracy is too poor to trust as
+// an extrapolation anchor.
+const MAX_EXTRAPOLATION_MS = 3000;
+const MIN_EXTRAPOLATION_SPEED_MPS = 0.35; // ~1.25 km/h
+const MAX_EXTRAPOLATION_ACCURACY_M = 50;
+
 // Once position + heading are this close to their targets, the interpolation
 // loop stops requesting new animation frames entirely (rather than spinning
 // at the display refresh rate forever) — it's woken back up (see kickAnimation)
@@ -55,8 +70,37 @@ const CONVERGED_HEADING_EPSILON_DEG = 0.05;
 // Desktop/mobile are untouched (interval 0 = no throttling).
 const TESLA_FRAME_INTERVAL_MS = 1000 / 24;
 
-const OFF_ROUTE_THRESHOLD = 80;
-const OFF_ROUTE_CHECK_INTERVAL = 5000;
+// Off-route detection now runs every animation frame (reusing the route
+// projection already computed for "Pac-Man" trimming below — no extra
+// polyline scan) instead of on a flat 5s timer, and requires the deviation
+// to persist for a confirm window rather than firing on the very first
+// frame past threshold — fast without being trigger-happy on GPS noise.
+// Two independent signals, either can start the confirm window:
+//  - plain distance from the route geometry
+//  - heading pointing meaningfully away from (or opposite to) the route's
+//    own local direction — catches a same-road U-turn that plain distance
+//    alone would miss (you can be right on top of the polyline while
+//    driving the wrong way along it).
+// The confirm window itself shortens whenever heading corroborates a real,
+// deliberate deviation (a clear turn or a reversal), and stays longer when
+// distance alone is the only signal (more likely just GPS drift/lane
+// offset) — this is the "use position + distance + heading + movement"
+// requirement in one small state machine.
+const OFF_ROUTE_THRESHOLD_M = 35;
+const OFF_ROUTE_DIVERGENCE_DEG = 45; // heading meaningfully diverges from route direction
+const OFF_ROUTE_REVERSAL_DEG = 120; // heading essentially opposite the route direction (U-turn)
+const OFF_ROUTE_CONFIRM_FAST_MS = 700;
+const OFF_ROUTE_CONFIRM_SLOW_MS = 2200;
+
+// U-turn / heading confirmation: a candidate bearing that differs from the
+// current confirmed heading by more than this is treated as "possible
+// U-turn, possibly just one noisy fix" — it must repeat (within tolerance)
+// across this many consecutive real fixes before being trusted, so a
+// single bad GPS reading can't spin the cursor around, but a genuine
+// sustained reversal still confirms within about one GPS update cycle.
+const HEADING_BIG_CHANGE_DEG = 90;
+const HEADING_CONFIRM_FIXES = 2;
+const HEADING_CONFIRM_TOLERANCE_DEG = 30;
 
 // Pin placement requires a press-and-hold of this length (a normal quick tap
 // no longer drops a pin) — see the mousedown/mouseup/dragstart handling in
@@ -468,29 +512,24 @@ function smoothPosition(
   ];
 }
 
-function distanceToRoute(
-  point: [number, number],
-  routeCoords: Array<[number, number]>
-): number {
-  let minDist = Infinity;
-  for (let i = 0; i < routeCoords.length - 1; i++) {
-    const d = pointToSegmentDistance(point, routeCoords[i], routeCoords[i + 1]);
-    if (d < minDist) minDist = d;
-  }
-  return minDist;
-}
-
-function pointToSegmentDistance(
-  p: [number, number],
-  a: [number, number],
-  b: [number, number]
-): number {
-  const dx = b[0] - a[0];
-  const dy = b[1] - a[1];
-  if (dx === 0 && dy === 0) return haversineDistance(p, a);
-  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy)));
-  const proj: [number, number] = [a[0] + t * dx, a[1] + t * dy];
-  return haversineDistance(p, proj);
+// Dead-reckons the interpolation TARGET forward from the last real GPS fix
+// using its reported speed and the current confirmed heading, so the lerp
+// in animateFrame always has a moving point to chase between GPS ticks
+// instead of a stale one it quickly catches up to and then waits at. See
+// MAX_EXTRAPOLATION_MS / MIN_EXTRAPOLATION_SPEED_MPS / MAX_EXTRAPOLATION_ACCURACY_M.
+function getExtrapolatedTarget(
+  anchor: [number, number],
+  anchorTimeMs: number,
+  speedMps: number,
+  accuracyM: number,
+  headingDeg: number,
+  nowMs: number
+): [number, number] {
+  if (speedMps < MIN_EXTRAPOLATION_SPEED_MPS) return anchor;
+  if (accuracyM > MAX_EXTRAPOLATION_ACCURACY_M) return anchor;
+  const elapsedMs = Math.min(nowMs - anchorTimeMs, MAX_EXTRAPOLATION_MS);
+  if (elapsedMs <= 0) return anchor;
+  return destinationPoint(anchor, headingDeg, speedMps * (elapsedMs / 1000));
 }
 
 // Shared closest-point-on-polyline projection, used both to snap the
@@ -784,8 +823,17 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const userLocationRef = useRef<[number, number] | null>(null);
     const renderedPositionRef = useRef<[number, number] | null>(null);
     const hasInitialLocationRef = useRef(false);
+    // Dead-reckoning inputs from the last accepted GPS fix — see
+    // getExtrapolatedTarget, called every animateFrame tick.
+    const lastFixTimeRef = useRef<number>(0);
+    const lastFixSpeedRef = useRef<number>(0);
+    const lastFixAccuracyRef = useRef<number>(0);
     const targetHeadingRef = useRef<number>(0);
     const currentHeadingRef = useRef<number>(0);
+    // U-turn confirmation — see the heading-selection block in the GPS
+    // watcher callback below.
+    const pendingHeadingRef = useRef<number | null>(null);
+    const pendingHeadingCountRef = useRef<number>(0);
     const cameraHeadingRef = useRef<number>(0);
     const animationFrameRef = useRef<number | null>(null);
     const isAnimatingRef = useRef(false);
@@ -806,7 +854,9 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const compassRefPropRef = useRef(compassRef);
     const activeRouteGeometryRef = useRef<Array<[number, number]> | null>(null);
     const activeRouteSegmentsRef = useRef<TrafficSegment[] | null>(null);
-    const lastOffRouteCheckRef = useRef<number>(0);
+    // Off-route confirm state — see the per-frame check in animateFrame.
+    const offRouteSinceRef = useRef<number | null>(null);
+    const offRouteTriggeredRef = useRef(false);
     const lastPositionWriteRef = useRef<number>(0);
     const isDraggingRef = useRef(false);
     const isZoomingRef = useRef(false);
@@ -1250,10 +1300,25 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       lastFrameTimeRef.current = now;
 
       const map = mapRef.current;
-      const target = userLocationRef.current;
+      const rawTarget = userLocationRef.current;
       let settled = true;
 
-      if (map && isMapReadyRef.current && target) {
+      if (map && isMapReadyRef.current && rawTarget) {
+        // Dead-reckon the target forward from the last real fix using its
+        // reported speed/heading — see getExtrapolatedTarget. While moving,
+        // this keeps advancing every frame instead of sitting still at a
+        // stale GPS point, which is what turns "glide then pause" into
+        // genuinely continuous motion. Falls back to the raw fix itself
+        // (no invented motion) when stopped, speed is unavailable, or the
+        // fix's own accuracy is too poor to extrapolate from confidently.
+        const target = getExtrapolatedTarget(
+          rawTarget,
+          lastFixTimeRef.current,
+          lastFixSpeedRef.current,
+          lastFixAccuracyRef.current,
+          currentHeadingRef.current,
+          now
+        );
         const current = renderedPositionRef.current ?? target;
         const nextPosition = smoothPosition(current, target, POSITION_LERP_ALPHA);
         renderedPositionRef.current = nextPosition;
@@ -1336,6 +1401,45 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
               tilt,
             });
             lastCameraStateRef.current = { lat: center[1], lng: center[0], heading: cameraHeadingRef.current, zoom };
+          }
+        }
+
+        // Off-route detection — every frame, reusing routeProjection (no
+        // extra polyline scan) instead of the old flat 5s timer. Two
+        // signals, either can start the confirm window: plain distance from
+        // the route, or heading pointing away from (or opposite to) the
+        // route's own local direction at the nearest point — the latter is
+        // what catches a same-road U-turn, which distance alone would miss
+        // (you can sit right on the polyline while driving the wrong way
+        // along it). The confirm window shortens whenever heading
+        // corroborates a real, deliberate deviation.
+        if (routeProjection) {
+          const routeGeomForCheck = activeRouteGeometryRef.current!;
+          const { segIdx } = routeProjection;
+          const segA = routeGeomForCheck[segIdx];
+          const segB = routeGeomForCheck[Math.min(segIdx + 1, routeGeomForCheck.length - 1)];
+          const routeBearing = segA[0] === segB[0] && segA[1] === segB[1] ? null : calculateBearing(segA, segB);
+          const headingDivergence = routeBearing !== null ? Math.abs(angleDiff(routeBearing, currentHeadingRef.current)) : 0;
+
+          const offRouteDist = haversineDistance(nextPosition, routeProjection.point);
+          const isFar = offRouteDist > OFF_ROUTE_THRESHOLD_M;
+          const isReversed = headingDivergence > OFF_ROUTE_REVERSAL_DEG;
+
+          if (isFar || isReversed) {
+            if (offRouteSinceRef.current === null) {
+              offRouteSinceRef.current = now;
+            }
+            const confirmMs =
+              isReversed || (isFar && headingDivergence > OFF_ROUTE_DIVERGENCE_DEG)
+                ? OFF_ROUTE_CONFIRM_FAST_MS
+                : OFF_ROUTE_CONFIRM_SLOW_MS;
+            if (!offRouteTriggeredRef.current && now - offRouteSinceRef.current >= confirmMs) {
+              offRouteTriggeredRef.current = true;
+              onOffRouteRef.current?.();
+            }
+          } else {
+            offRouteSinceRef.current = null;
+            offRouteTriggeredRef.current = false;
           }
         }
 
@@ -1612,6 +1716,14 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
             userLocationRef.current = rawCoords;
 
+            // Dead-reckoning anchor for animateFrame's extrapolation — see
+            // getExtrapolatedTarget. performance.now() here (not
+            // location.timestamp, which is on the OS/GPS clock) so this
+            // stays on the exact same clock as animateFrame's own `now`.
+            lastFixTimeRef.current = performance.now();
+            lastFixSpeedRef.current = location.speed != null && !isNaN(location.speed) && location.speed >= 0 ? location.speed : 0;
+            lastFixAccuracyRef.current = location.accuracy ?? 0;
+
             // Throttled cache write for next session's initial map view (see
             // readCachedPosition above) — not on every tick, just often
             // enough to stay roughly current.
@@ -1621,36 +1733,58 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
               writeCachedPosition(rawCoords);
             }
 
-            // Heading target: prefer device compass/GPS heading, fall back to
-            // bearing derived from movement once it's large enough to be reliable.
-            let newHeading: number | null = null;
-            if (location.heading != null && !isNaN(location.heading) && location.heading >= 0) {
-              newHeading = location.heading;
-            } else if (prev !== null) {
+            // Heading target: prefer bearing computed from real consecutive
+            // GPS positions while moving — this reacts immediately to an
+            // actual direction change (including a U-turn), unlike the
+            // OS/GPS-chip's own reported course (location.heading), which
+            // many devices smooth/lag internally during fast maneuvers.
+            // Only fall back to the device-reported heading when there's
+            // not enough movement to compute a reliable bearing ourselves
+            // (e.g. stopped or crawling).
+            let candidateHeading: number | null = null;
+            if (prev !== null) {
               const dist = haversineDistance(prev, rawCoords);
               if (dist >= MIN_MOVEMENT_FOR_BEARING) {
-                newHeading = calculateBearing(prev, rawCoords);
+                candidateHeading = calculateBearing(prev, rawCoords);
               }
             }
-            if (newHeading !== null) {
-              targetHeadingRef.current = newHeading;
+            if (candidateHeading === null && location.heading != null && !isNaN(location.heading) && location.heading >= 0) {
+              candidateHeading = location.heading;
+            }
+
+            if (candidateHeading !== null) {
+              const change = Math.abs(angleDiff(targetHeadingRef.current, candidateHeading));
+              if (change < HEADING_BIG_CHANGE_DEG) {
+                // Normal turning — commit immediately, the per-frame lerp
+                // already smooths this into a natural rotation.
+                targetHeadingRef.current = candidateHeading;
+                pendingHeadingRef.current = null;
+                pendingHeadingCountRef.current = 0;
+              } else {
+                // A big jump — possibly a real U-turn, possibly just one
+                // noisy fix. Require it to repeat (within tolerance) across
+                // HEADING_CONFIRM_FIXES consecutive fixes before trusting
+                // it, so a single bad reading can't spin the cursor around.
+                if (
+                  pendingHeadingRef.current !== null &&
+                  Math.abs(angleDiff(pendingHeadingRef.current, candidateHeading)) < HEADING_CONFIRM_TOLERANCE_DEG
+                ) {
+                  pendingHeadingCountRef.current += 1;
+                } else {
+                  pendingHeadingRef.current = candidateHeading;
+                  pendingHeadingCountRef.current = 1;
+                }
+                if (pendingHeadingCountRef.current >= HEADING_CONFIRM_FIXES) {
+                  targetHeadingRef.current = candidateHeading;
+                  pendingHeadingRef.current = null;
+                  pendingHeadingCountRef.current = 0;
+                }
+              }
             }
 
             kickAnimationRef.current();
 
             if (!map || !isMapReadyRef.current) return;
-
-            // Off-route detection
-            if (activeRouteGeometryRef.current && activeRouteGeometryRef.current.length > 0) {
-              const now = Date.now();
-              if (now - lastOffRouteCheckRef.current > OFF_ROUTE_CHECK_INTERVAL) {
-                lastOffRouteCheckRef.current = now;
-                const dist = distanceToRoute(rawCoords, activeRouteGeometryRef.current);
-                if (dist > OFF_ROUTE_THRESHOLD) {
-                  onOffRouteRef.current?.();
-                }
-              }
-            }
 
             // First-ever fix: if we're not already following, center on it once
             // so the user immediately sees themselves on the map.
@@ -1768,6 +1902,10 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
         setRoute(geometry: { type: string; coordinates: Array<[number, number]> } | null) {
           if (!mapRef.current || !isMapReadyRef.current) return;
+          // A freshly-assigned route starts a new off-route/heading-confirm
+          // episode — clear any state left over from the previous route.
+          offRouteSinceRef.current = null;
+          offRouteTriggeredRef.current = false;
           if (geometry) {
             activeRouteGeometryRef.current = geometry.coordinates as [number, number][];
             activeRouteSegmentsRef.current = null;
@@ -1782,6 +1920,8 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
         setAlternativeRoutes(routes: RouteAlternative[], selectedIndex: number) {
           if (!mapRef.current || !isMapReadyRef.current) return;
+          offRouteSinceRef.current = null;
+          offRouteTriggeredRef.current = false;
 
           // Clear all alt routes
           altRoutePolylinesRef.current.forEach(({ casing, line }) => {
@@ -1809,6 +1949,8 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
 
         selectRoute(index: number, routes: RouteAlternative[]) {
           if (!mapRef.current || !isMapReadyRef.current) return;
+          offRouteSinceRef.current = null;
+          offRouteTriggeredRef.current = false;
 
           altRoutePolylinesRef.current.forEach(({ casing, line }) => {
             casing.setPath([]);

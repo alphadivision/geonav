@@ -71,6 +71,10 @@ export interface UserLocation {
   lng: number;
   accuracy: number;
   heading?: number | null;
+  /** Ground speed in meters/second, from the Geolocation API's coords.speed
+   * — used to dead-reckon the cursor forward between GPS fixes (see
+   * MapCanvas's getExtrapolatedTarget). Undefined/null when unavailable. */
+  speed?: number | null;
 }
 
 export type MapStyle = 'dark' | 'standard' | 'satellite' | 'streets';

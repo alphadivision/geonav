@@ -101,6 +101,7 @@ export function watchPosition(
       lng: longitude,
       accuracy: accuracy ?? undefined,
       heading: heading ?? undefined,
+      speed: speed ?? undefined,
     });
   };
 
