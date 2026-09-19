@@ -5,7 +5,8 @@ import { SlidersHorizontal, AlertTriangle, MapPin, Zap } from 'lucide-react';
 import type { MapStyle } from '@/types';
 import type { Language, Translations } from '@/lib/i18n';
 import { CURSOR_OPTIONS, type CursorId } from '@/lib/cursors';
-import AccountSection from './AccountSection';
+import AccountSection, { type AuthUiState } from './AccountSection';
+import type { User as FirebaseUser } from '@/lib/firebase/authService';
 
 interface MapControlsPanelProps {
   language: Language;
@@ -20,6 +21,10 @@ interface MapControlsPanelProps {
   onChargersToggle: () => void;
   currentCursorId: CursorId;
   onCursorChange: (id: CursorId) => void;
+  firebaseUser: FirebaseUser | null;
+  authStatus: AuthUiState;
+  onFirebaseSignIn: () => void;
+  onFirebaseSignOut: () => void;
   t: Translations;
 }
 
@@ -62,6 +67,10 @@ export default function MapControlsPanel({
   onChargersToggle,
   currentCursorId,
   onCursorChange,
+  firebaseUser,
+  authStatus,
+  onFirebaseSignIn,
+  onFirebaseSignOut,
   t,
 }: MapControlsPanelProps) {
   const [open, setOpen] = useState(false);
@@ -122,7 +131,13 @@ export default function MapControlsPanel({
           </div>
 
           {/* Account (Google sign-in) */}
-          <AccountSection t={t} />
+          <AccountSection
+            t={t}
+            user={firebaseUser}
+            authStatus={authStatus}
+            onSignIn={onFirebaseSignIn}
+            onSignOut={onFirebaseSignOut}
+          />
 
           {/* Language */}
           <div className="px-4 py-3 border-b border-white/10">

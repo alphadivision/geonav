@@ -92,6 +92,10 @@ export interface Translations {
   authLoading: string;
   authError: string;
   authNotConfigured: string;
+  // Account plan / premium upsell placeholder (no Stripe wiring yet)
+  accountPlan: string;
+  accountPlanFree: string;
+  buyPremium: string;
 }
 
 export const translations: Record<Language, Translations> = {
@@ -180,6 +184,9 @@ export const translations: Record<Language, Translations> = {
     authLoading: 'შესვლა მიმდინარეობს...',
     authError: 'ავტორიზაცია ვერ მოხერხდა',
     authNotConfigured: 'სერვისი ჯერ არ არის მზად',
+    accountPlan: 'გეგმა',
+    accountPlanFree: 'უფასო',
+    buyPremium: 'Premium-ის შეძენა',
   },
   en: {
     appName: 'TSL MAP',
@@ -266,6 +273,9 @@ export const translations: Record<Language, Translations> = {
     authLoading: 'Signing in...',
     authError: 'Sign-in failed',
     authNotConfigured: 'Sign-in isn\'t set up yet',
+    accountPlan: 'Plan',
+    accountPlanFree: 'Free',
+    buyPremium: 'Buy Premium',
   },
 };
 

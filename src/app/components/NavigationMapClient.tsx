@@ -10,8 +10,15 @@ import { DEFAULT_CURSOR_ID, isCursorId, type CursorId } from '@/lib/cursors';
 import { getCurrentPosition } from '@/lib/geolocation';
 import { getPerformanceMode, applyPerformanceModeToDocument } from '@/lib/performanceMode';
 import { buildTrafficSegments } from '@/lib/traffic';
-import { subscribeToAuthState } from '@/lib/firebase/authService';
+import {
+  subscribeToAuthState,
+  completeRedirectSignIn,
+  signInWithGoogle,
+  signOutUser,
+  type User as FirebaseUser,
+} from '@/lib/firebase/authService';
 import { saveRecentRoute } from '@/lib/firebase/routesService';
+import type { AuthUiState } from './AccountSection';
 import type {
   SearchResult,
   RouteInfo,
@@ -164,6 +171,13 @@ export default function NavigationMapClient() {
   // users see zero visual change unless they pick the new option (see
   // src/lib/cursors.ts).
   const [cursorId, setCursorId] = useState<CursorId>(DEFAULT_CURSOR_ID);
+  // Firebase auth state — the single source of truth for the Account
+  // section's UI (see AccountSection/MapControlsPanel). Owned here (an
+  // always-mounted component) rather than inside AccountSection itself,
+  // which only mounts when Settings is opened and could miss the moment a
+  // Google redirect sign-in actually completed.
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthUiState>('idle');
   // Tap-to-navigate state
   const [pinDestination, setPinDestination] = useState<PinDestination | null>(null);
   const [isPinCalculating, setIsPinCalculating] = useState(false);
@@ -191,13 +205,41 @@ export default function NavigationMapClient() {
   // Keep refs in sync
   routeAlternativesRef.current = routeAlternatives;
 
-  // Track sign-in state for recent-route saving (see the effect below).
-  // Firebase itself is a no-op when not configured (see isFirebaseConfigured).
+  // Single Firebase auth subscription for the whole app: drives the Account
+  // section's UI (firebaseUser/authStatus) AND feeds the recent-route save
+  // effect below (firebaseUidRef) from the exact same source. Runs
+  // completeRedirectSignIn() first — this is the earliest point after a
+  // Google redirect sign-in lands back on the app that any Firebase call
+  // happens, maximizing the chance it's actually mounted in time to see it
+  // (Firebase itself is a no-op when not configured, see isFirebaseConfigured).
   useEffect(() => {
+    completeRedirectSignIn().catch(() => setAuthStatus('error'));
     const unsubscribe = subscribeToAuthState((user) => {
       firebaseUidRef.current = user?.uid ?? null;
+      setFirebaseUser(user);
+      setAuthStatus('idle');
     });
     return unsubscribe;
+  }, []);
+
+  const handleFirebaseSignIn = useCallback(async () => {
+    setAuthStatus('loading');
+    try {
+      // Navigates the browser away to Google immediately on success — this
+      // only ever resolves/rejects here if that redirect itself failed to
+      // start. The actual signed-in state arrives later via
+      // subscribeToAuthState above, after the redirect completes.
+      await signInWithGoogle();
+    } catch {
+      setAuthStatus('error');
+    }
+  }, []);
+
+  const handleFirebaseSignOut = useCallback(async () => {
+    await signOutUser();
+    firebaseUidRef.current = null;
+    setFirebaseUser(null);
+    setAuthStatus('idle');
   }, []);
 
   // Save the just-calculated route to the signed-in user's recent routes
@@ -957,6 +999,10 @@ export default function NavigationMapClient() {
           onChargersToggle={handleChargersToggle}
           currentCursorId={cursorId}
           onCursorChange={handleCursorChange}
+          firebaseUser={firebaseUser}
+          authStatus={authStatus}
+          onFirebaseSignIn={handleFirebaseSignIn}
+          onFirebaseSignOut={handleFirebaseSignOut}
           t={t}
         />
         <ZoomControls
