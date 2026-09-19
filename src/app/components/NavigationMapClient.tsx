@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 
 import type { Language } from '@/lib/i18n';
 import type { MapStyle } from '@/types';
-import { getStoredLanguage, setStoredLanguage, getTranslations, TRAFFIC_KEY, PLACES_KEY, CURSOR_KEY } from '@/lib/i18n';
+import { getStoredLanguage, setStoredLanguage, getTranslations, TRAFFIC_KEY, PLACES_KEY, CHARGERS_KEY, CURSOR_KEY } from '@/lib/i18n';
 import { DEFAULT_CURSOR_ID, isCursorId, type CursorId } from '@/lib/cursors';
 import { getCurrentPosition } from '@/lib/geolocation';
 import { getPerformanceMode, applyPerformanceModeToDocument } from '@/lib/performanceMode';
@@ -155,6 +155,9 @@ export default function NavigationMapClient() {
   // recreates the underlying vector map with a different Map ID (see
   // MapCanvas), the same mechanism already used for the Dark/Light toggle.
   const [placesEnabled, setPlacesEnabled] = useState(false);
+  // EV charger markers — default OFF (zero requests/markers until the user
+  // explicitly opts in). See MapCanvas's charger fetch/marker logic.
+  const [chargersEnabled, setChargersEnabled] = useState(false);
   // Selectable vehicle cursor — default keeps the original arrow so existing
   // users see zero visual change unless they pick the new option (see
   // src/lib/cursors.ts).
@@ -194,6 +197,9 @@ export default function NavigationMapClient() {
     // Restore places preference
     const storedPlaces = localStorage.getItem(PLACES_KEY);
     if (storedPlaces === 'true') setPlacesEnabled(true);
+    // Restore chargers preference
+    const storedChargers = localStorage.getItem(CHARGERS_KEY);
+    if (storedChargers === 'true') setChargersEnabled(true);
     // Restore cursor preference (falls back to DEFAULT_CURSOR_ID if unset/invalid)
     const storedCursor = localStorage.getItem(CURSOR_KEY);
     if (isCursorId(storedCursor)) setCursorId(storedCursor);
@@ -586,6 +592,17 @@ export default function NavigationMapClient() {
     });
   }, []);
 
+  // Chargers toggle — plain on/off, no map recreation involved (unlike
+  // Places): MapCanvas reacts to the chargersEnabled prop directly by
+  // fetching/clearing charger markers.
+  const handleChargersToggle = useCallback(() => {
+    setChargersEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem(CHARGERS_KEY, String(next));
+      return next;
+    });
+  }, []);
+
   // Cursor selection — direct setter (not a boolean toggle), persisted
   // immediately so the choice survives a reload.
   const handleCursorChange = useCallback((id: CursorId) => {
@@ -841,6 +858,7 @@ export default function NavigationMapClient() {
           mapStyle={mapStyle}
           trafficEnabled={trafficEnabled}
           placesEnabled={placesEnabled}
+          chargersEnabled={chargersEnabled}
           cursorId={cursorId}
           onMapReady={handleMapReady}
           onUserLocationUpdate={handleUserLocationUpdate}
@@ -896,6 +914,8 @@ export default function NavigationMapClient() {
           onTrafficToggle={handleTrafficToggle}
           placesEnabled={placesEnabled}
           onPlacesToggle={handlePlacesToggle}
+          chargersEnabled={chargersEnabled}
+          onChargersToggle={handleChargersToggle}
           currentCursorId={cursorId}
           onCursorChange={handleCursorChange}
           t={t}

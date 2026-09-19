@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useEffect } from 'react';
-import { SlidersHorizontal, AlertTriangle, MapPin } from 'lucide-react';
+import { SlidersHorizontal, AlertTriangle, MapPin, Zap } from 'lucide-react';
 import type { MapStyle } from '@/types';
 import type { Language, Translations } from '@/lib/i18n';
 import { CURSOR_OPTIONS, type CursorId } from '@/lib/cursors';
@@ -16,6 +16,8 @@ interface MapControlsPanelProps {
   onTrafficToggle: () => void;
   placesEnabled: boolean;
   onPlacesToggle: () => void;
+  chargersEnabled: boolean;
+  onChargersToggle: () => void;
   currentCursorId: CursorId;
   onCursorChange: (id: CursorId) => void;
   t: Translations;
@@ -56,6 +58,8 @@ export default function MapControlsPanel({
   onTrafficToggle,
   placesEnabled,
   onPlacesToggle,
+  chargersEnabled,
+  onChargersToggle,
   currentCursorId,
   onCursorChange,
   t,
@@ -230,7 +234,7 @@ export default function MapControlsPanel({
           </div>
 
           {/* Show Places (native map POI visibility) */}
-          <div className="px-4 py-3">
+          <div className="px-4 py-3 border-b border-white/10">
             <button
               onClick={onPlacesToggle}
               className="w-full flex items-center justify-between rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
@@ -250,6 +254,33 @@ export default function MapControlsPanel({
                   className={[
                     'absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
                     placesEnabled ? 'translate-x-4' : 'translate-x-0',
+                  ].join(' ')}
+                />
+              </span>
+            </button>
+          </div>
+
+          {/* Chargers (EV charging station markers) */}
+          <div className="px-4 py-3">
+            <button
+              onClick={onChargersToggle}
+              className="w-full flex items-center justify-between rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+              aria-pressed={chargersEnabled}
+            >
+              <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <Zap size={16} className={chargersEnabled ? 'text-primary' : 'text-muted-foreground'} />
+                {t.chargers}
+              </span>
+              <span
+                className={[
+                  'inline-block w-9 h-5 rounded-full relative transition-colors flex-shrink-0',
+                  chargersEnabled ? 'bg-primary' : 'bg-white/10',
+                ].join(' ')}
+              >
+                <span
+                  className={[
+                    'absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
+                    chargersEnabled ? 'translate-x-4' : 'translate-x-0',
                   ].join(' ')}
                 />
               </span>

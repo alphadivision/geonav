@@ -47,6 +47,20 @@ export interface RouteAlternative {
   trafficSegments?: TrafficSegment[];
 }
 
+// A single EV charging station returned by /api/charging-stations (a thin
+// proxy over Google Places API (New) Nearby Search). Only fetched while the
+// Chargers toggle is on — see MapCanvas's charger marker logic.
+export interface ChargingStation {
+  id: string;
+  name: string;
+  address?: string;
+  coordinates: [number, number]; // [lng, lat]
+  isTeslaSupercharger: boolean;
+  connectorCount?: number;
+  rating?: number;
+  openNow?: boolean;
+}
+
 export interface PinDestination {
   coordinates: [number, number]; // [lng, lat]
   address?: string;

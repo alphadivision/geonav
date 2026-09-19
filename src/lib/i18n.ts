@@ -50,6 +50,8 @@ export interface Translations {
   traffic: string;
   // Places (map POI visibility toggle)
   showPlaces: string;
+  // Chargers (EV charging station markers toggle)
+  chargers: string;
   // Cursor (selectable vehicle marker)
   cursorStyle: string;
   cursorDefault: string;
@@ -141,6 +143,8 @@ export const translations: Record<Language, Translations> = {
     traffic: 'ტრეფიკი',
     // Places (map POI visibility toggle)
     showPlaces: 'ადგილები',
+    // Chargers (EV charging station markers toggle)
+    chargers: 'დამტენები',
     // Cursor (selectable vehicle marker)
     cursorStyle: 'კურსორი',
     cursorDefault: 'სტანდარტული',
@@ -225,6 +229,8 @@ export const translations: Record<Language, Translations> = {
     traffic: 'Traffic',
     // Places (map POI visibility toggle)
     showPlaces: 'Show Places',
+    // Chargers (EV charging station markers toggle)
+    chargers: 'Chargers',
     // Cursor (selectable vehicle marker)
     cursorStyle: 'Cursor',
     cursorDefault: 'Default',
@@ -271,6 +277,7 @@ export const LANGUAGE_KEY = 'geonav_language';
 export const MAP_STYLE_KEY = 'geonav_map_style';
 export const TRAFFIC_KEY = 'geonav_traffic';
 export const PLACES_KEY = 'geonav_places';
+export const CHARGERS_KEY = 'geonav_chargers';
 export const CURSOR_KEY = 'geonav_cursor';
 
 export function getStoredLanguage(): Language {

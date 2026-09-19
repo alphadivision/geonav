@@ -8,7 +8,7 @@ import React, {
   useCallback,
 } from 'react';
 import { setOptions, importLibrary } from '@googlemaps/js-api-loader';
-import type { UserLocation, MapStyle, RouteAlternative, TrafficSegment } from '@/types';
+import type { UserLocation, MapStyle, RouteAlternative, TrafficSegment, ChargingStation } from '@/types';
 import type { Language } from '@/lib/i18n';
 import {
   GEORGIA_CENTER,
@@ -19,6 +19,7 @@ import {
 import { watchPosition, clearWatch } from '@/lib/geolocation';
 import { getPerformanceMode } from '@/lib/performanceMode';
 import { DEFAULT_CURSOR_ID, getCursorOption, type CursorId, type CursorOption } from '@/lib/cursors';
+import { parseChargingStations, CHARGING_STATION_FIELD_MASK, type RawPlace } from '@/lib/chargers';
 import type { TeslaCompassHandle } from './TeslaCompass';
 
 /// <reference types="@types/google.maps" />
@@ -257,6 +258,46 @@ function applyPoiVisibilityFallback(map: google.maps.Map, style: MapStyle, place
 const PIN_ASSET_URL = '/markers/pin.png';
 const PIN_DISPLAY_WIDTH = 34;
 const PIN_DISPLAY_HEIGHT = 34;
+
+// Google Places data (station name/address) is rendered into the charger
+// InfoWindow's HTML content — escape it so it can never be interpreted as
+// markup.
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// EV charger markers — inline SVG data URIs (no extra asset file/network
+// request). Tesla Superchargers get a distinct red bolt so they stand out
+// from other chargers (blue), matching the requirement to surface them
+// specifically. Kept tiny/flat, consistent with the app's other markers.
+function chargerIconSvg(color: string): string {
+  return (
+    'data:image/svg+xml;utf8,' +
+    encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">` +
+        `<circle cx="13" cy="13" r="11" fill="${color}" stroke="#0a0a0a" stroke-width="1.5"/>` +
+        `<path d="M14.2 4.5 7.8 14.8h4.1l-1.3 6.7 7.6-11.4h-4.4z" fill="#fff"/>` +
+        `</svg>`
+    )
+  );
+}
+const CHARGER_ICON_URL = chargerIconSvg('#1a73e8');
+const CHARGER_ICON_TESLA_URL = chargerIconSvg('#e82127');
+const CHARGER_ICON_SIZE = 26;
+
+// Charger fetching: gated by zoom (no point loading pins the user can't
+// meaningfully see/tap yet, and it keeps a zoomed-out view from requesting a
+// huge area) and debounced after the map goes idle (never per-frame, never
+// per-GPS-tick — see the 'idle' listener in attachMapListeners). A capped
+// radius keeps each request cheap regardless of viewport size.
+const MIN_CHARGER_ZOOM = 13;
+const CHARGER_DEBOUNCE_MS = 700;
+const CHARGER_MAX_RADIUS_M = 6000;
 
 // Google Maps' image-based Marker.setIcon() has no native rotation support
 // (only vector Symbol icons expose a `rotation` field), and the provided
@@ -594,6 +635,9 @@ interface MapCanvasProps {
   /** Native map POI (places) visibility — see GOOGLE_MAPS_MAP_ID_POI /
    * resolveMapId. Defaults to false (POIs off, the normal nav experience). */
   placesEnabled?: boolean;
+  /** EV charging station markers (Google Places API, via /api/charging-stations).
+   * Defaults to false — zero requests, zero markers, until explicitly enabled. */
+  chargersEnabled?: boolean;
   /** Which vehicle cursor asset to render — see src/lib/cursors.ts. Defaults
    * to DEFAULT_CURSOR_ID (the original arrow), so omitting this prop keeps
    * existing behavior identical. */
@@ -688,6 +732,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       mapStyle,
       trafficEnabled,
       placesEnabled = false,
+      chargersEnabled = false,
       cursorId = DEFAULT_CURSOR_ID,
       onMapReady,
       onUserLocationUpdate,
@@ -714,6 +759,15 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const userArrowMarkerRef = useRef<ArrowOverlayInstance | null>(null);
     const ArrowOverlayClassRef = useRef<ReturnType<typeof createArrowOverlayClass> | null>(null);
     const trafficLayerRef = useRef<google.maps.TrafficLayer | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
+    // EV charger markers, keyed by Places station id — lets a refetch reuse
+    // markers that are still present and remove only the ones that dropped
+    // out of view, instead of tearing everything down every time (see
+    // reconcileChargerMarkers). One shared InfoWindow, not one per marker.
+    const chargerMarkersRef = useRef<Map<string, google.maps.Marker>>(new Map()); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const chargerInfoWindowRef = useRef<google.maps.InfoWindow | null>(null);
+    const chargerFetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const chargerFetchAbortRef = useRef<AbortController | null>(null);
+    const chargerFetchSeqRef = useRef(0);
 
     // Route polylines
     // mainRouteCasingPoolRef/mainRouteSegmentPolylinesRef are parallel pools
@@ -745,6 +799,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     const onFollowDisabledRef = useRef(onFollowDisabled);
     const trafficEnabledRef = useRef(trafficEnabled);
     const placesEnabledRef = useRef(placesEnabled);
+    const chargersEnabledRef = useRef(chargersEnabled);
     const cursorIdRef = useRef(cursorId);
     const onMapTapRef = useRef(onMapTap);
     const onOffRouteRef = useRef(onOffRoute);
@@ -766,10 +821,189 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
     onFollowDisabledRef.current = onFollowDisabled;
     trafficEnabledRef.current = trafficEnabled;
     placesEnabledRef.current = placesEnabled;
+    chargersEnabledRef.current = chargersEnabled;
     cursorIdRef.current = cursorId;
     onMapTapRef.current = onMapTap;
     onOffRouteRef.current = onOffRoute;
     compassRefPropRef.current = compassRef;
+
+    // Removes every charger marker and closes the shared InfoWindow —
+    // called when the toggle turns off (immediate cleanup, per spec) and on
+    // full unmount/map recreation.
+    const clearChargerMarkers = useCallback(() => {
+      chargerMarkersRef.current.forEach((marker) => marker.setMap(null));
+      chargerMarkersRef.current.clear();
+      chargerInfoWindowRef.current?.close();
+    }, []);
+
+    const openChargerInfoWindow = useCallback((map: google.maps.Map, marker: google.maps.Marker, station: ChargingStation) => {
+      if (!chargerInfoWindowRef.current) {
+        chargerInfoWindowRef.current = new google.maps.InfoWindow();
+      }
+      const parts: string[] = [
+        `<div style="font:13px system-ui,sans-serif;color:#111;max-width:220px;line-height:1.4;">`,
+        `<div style="font-weight:600;margin-bottom:2px;">${escapeHtml(station.name)}</div>`,
+      ];
+      if (station.isTeslaSupercharger) {
+        parts.push(`<div style="color:#e82127;font-weight:600;font-size:12px;margin-bottom:2px;">⚡ Tesla Supercharger</div>`);
+      }
+      if (station.address) {
+        parts.push(`<div style="color:#444;margin-bottom:2px;">${escapeHtml(station.address)}</div>`);
+      }
+      const info: string[] = [];
+      if (typeof station.connectorCount === 'number') info.push(`${station.connectorCount} connectors`);
+      if (typeof station.openNow === 'boolean') info.push(station.openNow ? 'Open now' : 'Closed');
+      if (typeof station.rating === 'number') info.push(`★ ${station.rating}`);
+      if (info.length > 0) {
+        parts.push(`<div style="color:#666;font-size:12px;">${info.join(' · ')}</div>`);
+      }
+      parts.push('</div>');
+      chargerInfoWindowRef.current.setContent(parts.join(''));
+      chargerInfoWindowRef.current.open({ map, anchor: marker });
+    }, []);
+
+    // Reconciles the marker pool against a fresh station list: reuses
+    // markers for stations still present (just repositions/relabels if
+    // needed), creates markers only for genuinely new stations, and removes
+    // markers for stations that dropped out of the result set. Never tears
+    // down and rebuilds the whole set on every fetch.
+    const reconcileChargerMarkers = useCallback((map: google.maps.Map, stations: ChargingStation[]) => {
+      const seen = new Set<string>();
+      for (const station of stations) {
+        seen.add(station.id);
+        const position = { lat: station.coordinates[1], lng: station.coordinates[0] };
+        const existing = chargerMarkersRef.current.get(station.id);
+        if (existing) {
+          existing.setPosition(position);
+          continue;
+        }
+        const marker = new google.maps.Marker({
+          map,
+          position,
+          zIndex: 5,
+          icon: {
+            url: station.isTeslaSupercharger ? CHARGER_ICON_TESLA_URL : CHARGER_ICON_URL,
+            scaledSize: new google.maps.Size(CHARGER_ICON_SIZE, CHARGER_ICON_SIZE),
+            anchor: new google.maps.Point(CHARGER_ICON_SIZE / 2, CHARGER_ICON_SIZE / 2),
+          },
+        });
+        marker.addListener('click', () => openChargerInfoWindow(map, marker, station));
+        chargerMarkersRef.current.set(station.id, marker);
+      }
+      // Remove markers for stations no longer in view — bounded memory, no
+      // permanent ever-growing list (per spec).
+      for (const [id, marker] of chargerMarkersRef.current) {
+        if (!seen.has(id)) {
+          marker.setMap(null);
+          chargerMarkersRef.current.delete(id);
+        }
+      }
+    }, [openChargerInfoWindow]);
+
+    // The only place that actually issues a charging-station request. Gated
+    // on: toggle on, map ready, and zoom level — below MIN_CHARGER_ZOOM this
+    // clears any existing markers and does NOT fetch (a zoomed-out view has
+    // no useful per-station detail and would otherwise require a huge,
+    // expensive search radius). A monotonic sequence number + AbortController
+    // together discard any response that arrives after a newer request has
+    // already been issued (e.g. the user panned again before the first
+    // reply came back), so results can never apply out of order.
+    const fetchChargingStations = useCallback(async () => {
+      const map = mapRef.current;
+      if (!chargersEnabledRef.current || !map || !isMapReadyRef.current) return;
+
+      const zoom = map.getZoom() ?? 0;
+      if (zoom < MIN_CHARGER_ZOOM) {
+        clearChargerMarkers();
+        return;
+      }
+      const bounds = map.getBounds();
+      const center = map.getCenter();
+      if (!bounds || !center) return;
+
+      const ne = bounds.getNorthEast();
+      const radius = Math.min(
+        CHARGER_MAX_RADIUS_M,
+        Math.max(300, haversineDistance([center.lng(), center.lat()], [ne.lng(), ne.lat()]))
+      );
+
+      chargerFetchAbortRef.current?.abort();
+      const controller = new AbortController();
+      chargerFetchAbortRef.current = controller;
+      const seq = ++chargerFetchSeqRef.current;
+      const roundedRadius = Math.round(radius);
+      const lat = center.lat();
+      const lng = center.lng();
+
+      let stations: ChargingStation[] | null = null;
+
+      // PRIMARY: direct browser → Places API (New) call, same pattern as
+      // fetchRoutes' direct Routes API call — works because the browser
+      // sends the page's real Referer, which the browser-restricted API key
+      // allows (a server-to-server call has no such Referer, which is why
+      // the /api/charging-stations fallback below can fail depending on
+      // which key is configured server-side).
+      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+      if (apiKey) {
+        try {
+          const res = await fetch('https://places.googleapis.com/v1/places:searchNearby', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Goog-Api-Key': apiKey,
+              'X-Goog-FieldMask': CHARGING_STATION_FIELD_MASK,
+            },
+            body: JSON.stringify({
+              includedTypes: ['electric_vehicle_charging_station'],
+              maxResultCount: 20,
+              locationRestriction: {
+                circle: { center: { latitude: lat, longitude: lng }, radius: roundedRadius },
+              },
+            }),
+            signal: controller.signal,
+          });
+          if (res.ok) {
+            const data = (await res.json()) as { places?: RawPlace[] };
+            stations = parseChargingStations(data.places || []);
+          }
+        } catch {
+          // Fall through to the server-side fallback below.
+        }
+      }
+
+      // FALLBACK: server-side /api/charging-stations (only reached if the
+      // direct call above didn't produce a result).
+      if (stations === null) {
+        try {
+          const params = new URLSearchParams({ lat: String(lat), lng: String(lng), radius: String(roundedRadius) });
+          const res = await fetch(`/api/charging-stations?${params.toString()}`, { signal: controller.signal });
+          if (res.ok) {
+            const data = (await res.json()) as { stations?: ChargingStation[] };
+            stations = data.stations || [];
+          }
+        } catch {
+          // Aborted or network error — nothing to render this round.
+        }
+      }
+
+      if (stations === null) return;
+      // Stale response (a newer request has since been issued) or the
+      // toggle/zoom moved out of range while this was in flight — drop it.
+      if (seq !== chargerFetchSeqRef.current || !chargersEnabledRef.current) return;
+      if ((mapRef.current?.getZoom() ?? 0) < MIN_CHARGER_ZOOM) return;
+      reconcileChargerMarkers(map, stations);
+    }, [clearChargerMarkers, reconcileChargerMarkers]);
+
+    // Debounced entry point for map movement (see the 'idle' listener) —
+    // coalesces rapid pan/zoom into a single request after things settle.
+    const scheduleChargerFetch = useCallback(() => {
+      if (!chargersEnabledRef.current) return;
+      if (chargerFetchTimeoutRef.current) clearTimeout(chargerFetchTimeoutRef.current);
+      chargerFetchTimeoutRef.current = setTimeout(() => {
+        chargerFetchTimeoutRef.current = null;
+        fetchChargingStations();
+      }, CHARGER_DEBOUNCE_MS);
+    }, [fetchChargingStations]);
 
     const applyTrafficVisibility = useCallback((enabled: boolean) => {
       let map = mapRef.current;
@@ -806,6 +1040,16 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         zoomTimeoutRef.current = setTimeout(() => {
           isZoomingRef.current = false;
         }, 300);
+      });
+
+      // Chargers: fetch only once the map has actually settled, never
+      // per-frame — this naturally excludes the continuous moveCamera()
+      // calls during active GPS-follow navigation (the map never reaches
+      // 'idle' while it's continuously being repositioned), so driving with
+      // follow mode on never spams charger requests. scheduleChargerFetch
+      // itself is a no-op whenever the toggle is off.
+      map.addListener('idle', () => {
+        scheduleChargerFetch();
       });
 
       map.addListener('dragstart', () => {
@@ -875,7 +1119,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
           longPressTimerRef.current = null;
         }
       });
-    }, [onZoomChange]);
+    }, [onZoomChange, scheduleChargerFetch]);
 
     // Vector maps can't change their `colorScheme` after creation (Google's
     // documented behavior — setOptions has no effect on it post-init), so a
@@ -937,6 +1181,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
       destinationMarkerRef.current?.setMap(newMap);
       pinMarkerRef.current?.setMap(newMap);
       userArrowMarkerRef.current?.setMap(newMap);
+      chargerMarkersRef.current.forEach((marker) => marker.setMap(newMap));
 
       attachMapListeners(newMap);
       applyPoiVisibilityFallback(newMap, style, placesEnabledRef.current);
@@ -1167,6 +1412,25 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         applyTrafficVisibility(trafficEnabled);
       }
     }, [trafficEnabled, applyTrafficVisibility]);
+
+    // Chargers toggled — ON fetches immediately for the current view (the
+    // map is already settled at this point, no need to wait for 'idle');
+    // OFF cancels any pending/in-flight request and removes every marker
+    // right away, guaranteeing zero lingering markers and zero further
+    // requests until re-enabled.
+    useEffect(() => {
+      if (!isMapReadyRef.current) return;
+      if (chargersEnabled) {
+        fetchChargingStations();
+      } else {
+        if (chargerFetchTimeoutRef.current) {
+          clearTimeout(chargerFetchTimeoutRef.current);
+          chargerFetchTimeoutRef.current = null;
+        }
+        chargerFetchAbortRef.current?.abort();
+        clearChargerMarkers();
+      }
+    }, [chargersEnabled, fetchChargingStations, clearChargerMarkers]);
 
     // Cursor selection changed — update the existing marker's asset/size in
     // place (see ArrowOverlay.setCursorOption). Never recreates the marker,
@@ -1427,6 +1691,11 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(
         pinMarkerRef.current?.setMap(null);
         userArrowMarkerRef.current?.setMap(null);
         trafficLayerRef.current?.setMap(null);
+        if (chargerFetchTimeoutRef.current) clearTimeout(chargerFetchTimeoutRef.current);
+        chargerFetchAbortRef.current?.abort();
+        chargerMarkersRef.current.forEach((marker) => marker.setMap(null));
+        chargerMarkersRef.current.clear();
+        chargerInfoWindowRef.current?.close();
         mainRouteSegmentPolylinesRef.current.forEach((poly) => poly.setMap(null));
         mainRouteSegmentPolylinesRef.current = [];
         mainRouteCasingPoolRef.current.forEach((poly) => poly.setMap(null));
