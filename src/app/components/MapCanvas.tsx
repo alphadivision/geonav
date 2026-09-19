@@ -556,11 +556,23 @@ function renderRouteWithTraffic(
     return;
   }
 
+  const lastIdx = coordinates.length - 1;
   let used = 0;
-  for (const seg of segments) {
+  for (let i = 0; i < segments.length; i++) {
     if (used >= poolSize) break;
-    const start = Math.max(0, seg.startIdx);
-    const end = Math.min(coordinates.length - 1, seg.endIdx);
+    const seg = segments[i];
+    // Guarantee gapless, edge-to-edge coverage of the ENTIRE route: force
+    // the first segment to start at index 0 and the last to reach the
+    // final point, regardless of what Google's own interval boundaries
+    // said. Without this, any gap left uncovered by the API's own data
+    // (e.g. the very start or the final approach to the destination) would
+    // render as NOTHING — no casing, no fill — silently exposing the base
+    // map / native TrafficLayer underneath instead of any of our own
+    // traffic colors, which is exactly what "still looks blue/wrong near
+    // the destination" would look like even with per-segment coloring
+    // otherwise working correctly.
+    const start = i === 0 ? 0 : Math.max(0, seg.startIdx);
+    const end = i === segments.length - 1 ? lastIdx : Math.min(lastIdx, seg.endIdx);
     const segPath = path.slice(start, end + 1);
     if (segPath.length < 2) continue;
     casingPool[used].setPath(segPath);
